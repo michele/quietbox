@@ -6,10 +6,12 @@ package imapbackend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -158,4 +160,14 @@ func (b *Backend) ListFolders(ctx context.Context) ([]mail.Folder, error) {
 func (b *Backend) Close() error {
 	_ = b.c.Logout().Wait()
 	return b.c.Close()
+}
+
+// FetchHeaders is implemented in a later commit of M1.
+func (b *Backend) FetchHeaders(context.Context, string, time.Time, func([]mail.Header) error) error {
+	return errors.New("imapbackend: FetchHeaders not implemented yet")
+}
+
+// CreateFolder is implemented in a later commit of M1.
+func (b *Backend) CreateFolder(context.Context, string) error {
+	return errors.New("imapbackend: CreateFolder not implemented yet")
 }
