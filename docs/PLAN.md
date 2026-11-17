@@ -51,7 +51,15 @@ type = "blackhole"     # sender blocked; future mail goes to Trash
 
 Rules:
 - More than one folder per type is allowed, but then only training sends mail there,
-  never detection (detection needs exactly one target per type).
+  never detection (detection needs exactly one target per type). To opt in, set
+  `detect = true` on exactly one folder of that type; `quietbox check` warns when a
+  type has several folders and no detection target.
+- Config validation (hard errors): exactly one `important` folder and it is `INBOX`;
+  at least one `later`; at most one `blackhole`; no duplicate names; no unknown keys;
+  `detect = true` is not allowed on `blackhole`. The IMAP password comes only from
+  `QUIETBOX_IMAP_PASSWORD`.
+- `[imap]` section: `host`, `port` (default 993 / 143), `username`, `tls`
+  (`implicit` default, `starttls`, or `none`, which is only accepted for loopback hosts).
 - A config with only `important` + `later` works fine (SaneBox's basic setup).
 - **Unknown mail that matches nothing stays in INBOX.** Hiding a real person's email is
   the worst possible failure.
@@ -126,6 +134,9 @@ Each one ends with a demo against the docker test server and a tagged commit.
   covering every folder type, including mixed senders
 - config loading + validation (types, one detection target per type)
 - `quietbox check`: connect, list capabilities, show which configured folders exist
+- Test server: Dovecot 2.4.5 (pinned by digest), seeded from `testdata/seed/` by `tools/seed`.
+  It does **not** advertise OBJECTID, so local tests only cover the `Message-ID` key fallback;
+  the `EMAILID` path is verified only against a server that supports RFC 8474 (Fastmail).
 - **Done when:** works against the test server and your real Fastmail.
 
 ### M1: `init` / `learn`
