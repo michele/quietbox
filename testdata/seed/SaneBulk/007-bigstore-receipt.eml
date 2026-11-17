@@ -1,0 +1,10 @@
+From: store@bigstore.test
+To: me@quietbox.test
+Subject: Your order receipt
+Date: Thu, 02 Apr 2026 09:00:00 +0000
+Message-ID: <sanebulk-bigstore-receipt@seed.quietbox.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Hello.

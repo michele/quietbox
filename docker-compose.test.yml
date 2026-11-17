@@ -1,0 +1,13 @@
+# Throwaway IMAP server for integration tests. Bound to loopback only; mail lives
+# on tmpfs so `down` wipes it and every run starts from identical state.
+services:
+  imap:
+    image: docker.io/dovecot/dovecot@sha256:a2e908c9a93698f3923104ea5be7f4beacde9586242aff5d8059599d0042c62a # dovecot 2.4.5
+    ports:
+      - "127.0.0.1:1143:31143"
+    environment:
+      USER_PASSWORD: "{PLAIN}test"
+    tmpfs:
+      - /srv/vmail:mode=1777
+    volumes:
+      - ./testdata/dovecot/99-test.conf:/etc/dovecot/conf.d/99-test.conf:ro
