@@ -50,7 +50,7 @@ func TestIntegrationCapabilitiesAndFolders(t *testing.T) {
 		got[f.Name] = f.Messages
 	}
 	want := map[string]uint32{
-		"INBOX": 10, "Sent": 4, "SaneNews": 14, "SaneBulk": 9, "SaneLater": 8, "SaneBlackHole": 2,
+		"INBOX": 10, "Sent": 4, "SaneNews": 16, "SaneBulk": 9, "SaneLater": 8, "SaneBlackHole": 2,
 	}
 	for name, n := range want {
 		if got[name] != n {
@@ -90,12 +90,12 @@ func collect(t *testing.T, b *Backend, ctx context.Context, folder string, since
 func TestIntegrationFetchHeadersAllAndBatches(t *testing.T) {
 	b, ctx := dial(t)
 	old := fetchBatch
-	fetchBatch = 4 // 14 messages => 4 batches
+	fetchBatch = 4 // 16 messages => 4 batches
 	t.Cleanup(func() { fetchBatch = old })
 
 	hs := collect(t, b, ctx, "SaneNews", time.Time{})
-	if len(hs) != 14 {
-		t.Fatalf("got %d headers, want 14", len(hs))
+	if len(hs) != 16 {
+		t.Fatalf("got %d headers, want 16", len(hs))
 	}
 	senders := map[string]int{}
 	for _, h := range hs {

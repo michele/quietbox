@@ -23,30 +23,89 @@ func main() {
 	user := flag.String("user", "me@quietbox.test", "username")
 	pass := flag.String("pass", "test", "password")
 	dir := flag.String("dir", "testdata/seed", "seed directory")
+	synthetic := flag.Int("synthetic", 0, "instead of the fixtures, append N generated messages to --folder (for runtime benchmarks)")
+	folder := flag.String("folder", "", "folder for --synthetic")
 	flag.Parse()
-	if err := run(*addr, *user, *pass, *dir); err != nil {
+	var err error
+	if *synthetic > 0 {
+		err = runSynthetic(*addr, *user, *pass, *folder, *synthetic)
+	} else {
+		err = run(*addr, *user, *pass, *dir)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "seed:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, user, pass, dir string) error {
+// connect refuses non-loopback addresses, dials (retrying while the container
+// starts) and logs in.
+func connect(addr, user, pass string) (*imapclient.Client, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return fmt.Errorf("refusing non-loopback address %q", addr)
+		return nil, fmt.Errorf("refusing non-loopback address %q", addr)
 	}
-
 	c, err := dialWithRetry(addr, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Login(user, pass).Wait(); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("login: %w", err)
+	}
+	return c, nil
+}
+
+// runSynthetic appends n generated messages to folder. Senders and dates are
+// deterministic: ~n/25 senders over ~40 domains, spread over the two years before
+// 2026-06-01, so a learn run has realistic sender fan-out.
+func runSynthetic(addr, user, pass, folder string, n int) error {
+	if folder == "" {
+		return fmt.Errorf("--synthetic needs --folder")
+	}
+	c, err := connect(addr, user, pass)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = c.Close() }()
-	if err := c.Login(user, pass).Wait(); err != nil {
-		return fmt.Errorf("login: %w", err)
+	if folder != "INBOX" {
+		_ = c.Create(folder, nil).Wait()
 	}
+	ref := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	senders := max(n/25, 10)
+	for i := 0; i < n; i++ {
+		s := (i * 7919) % senders
+		when := ref.Add(-time.Duration((i*104729)%(730*24*60)) * time.Minute)
+		msg := fmt.Sprintf("From: Sender %d <s%d@dom%d.test>\r\nTo: me@quietbox.test\r\nSubject: Synthetic %d\r\n"+
+			"Date: %s\r\nMessage-ID: <syn-%d@seed.quietbox.test>\r\nList-Id: <l%d.dom%d.test>\r\n\r\nbody\r\n",
+			s, s, s%40, i, when.Format(time.RFC1123Z), i, s, s%40)
+		cmd := c.Append(folder, int64(len(msg)), &imap.AppendOptions{Time: when, Flags: []imap.Flag{imap.FlagSeen}})
+		if _, err := cmd.Write([]byte(msg)); err != nil {
+			return err
+		}
+		if err := cmd.Close(); err != nil {
+			return err
+		}
+		if _, err := cmd.Wait(); err != nil {
+			return err
+		}
+		if (i+1)%5000 == 0 {
+			fmt.Printf("appended %d/%d\n", i+1, n)
+		}
+	}
+	fmt.Printf("appended %d synthetic messages to %s (%d senders)\n", n, folder, senders)
+	return c.Logout().Wait()
+}
+
+func run(addr, user, pass, dir string) error {
+	c, err := connect(addr, user, pass)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
 
 	folders, err := os.ReadDir(dir)
 	if err != nil {

@@ -3,7 +3,7 @@ Message key: fallback to Message-ID header (server lacks OBJECTID)
 FOLDER         TYPE        STATUS   MESSAGES  DETECTION
 INBOX          important   present  10        target
 SaneLater      later       present  8         target
-SaneNews       newsletter  present  14        target
+SaneNews       newsletter  present  16        target
 SaneBulk       bulk        present  9         -
 SaneReceipts   bulk        missing  -         init will create it
 SaneBlackHole  blackhole   present  2         never (manual only)
