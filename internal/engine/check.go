@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -61,16 +62,17 @@ func Check(ctx context.Context, cfg *config.Config, b mail.Backend) (*Report, er
 }
 
 // Write renders the report as plain text.
-func (r *Report) Write(w io.Writer) {
-	fmt.Fprintf(w, "Server capabilities: %s\n", strings.Join(r.Capabilities, " "))
+func (r *Report) Write(w io.Writer) error {
+	var buf bytes.Buffer // writes to a Buffer cannot fail; only the final copy can
+	fmt.Fprintf(&buf, "Server capabilities: %s\n", strings.Join(r.Capabilities, " "))
 	if r.ObjectID {
-		fmt.Fprintln(w, "Message key: EMAILID (server supports OBJECTID)")
+		fmt.Fprintln(&buf, "Message key: EMAILID (server supports OBJECTID)")
 	} else {
-		fmt.Fprintln(w, "Message key: fallback to Message-ID header (server lacks OBJECTID)")
+		fmt.Fprintln(&buf, "Message key: fallback to Message-ID header (server lacks OBJECTID)")
 	}
-	fmt.Fprintln(w)
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "FOLDER\tTYPE\tSTATUS\tMESSAGES\tDETECTION")
+	fmt.Fprintln(&buf)
+	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "FOLDER\tTYPE\tSTATUS\tMESSAGES\tDETECTION")
 	for _, f := range r.Folders {
 		status, msgs := "missing", "-"
 		if f.Exists {
@@ -84,16 +86,23 @@ func (r *Report) Write(w io.Writer) {
 			detect = "target"
 		}
 		if !f.Exists {
-			detect += " | init will create it"
-			detect = strings.TrimPrefix(detect, "- | ")
+			if detect == "-" {
+				detect = "init will create it"
+			} else {
+				detect += " | init will create it"
+			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", f.Name, f.Type, status, msgs, detect)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", f.Name, f.Type, status, msgs, detect)
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
 	if len(r.Warnings) > 0 {
-		fmt.Fprintln(w, "\nWarnings:")
+		fmt.Fprintln(&buf, "\nWarnings:")
 		for _, warn := range r.Warnings {
-			fmt.Fprintf(w, "  - %s\n", warn)
+			fmt.Fprintf(&buf, "  - %s\n", warn)
 		}
 	}
+	_, err := w.Write(buf.Bytes())
+	return err
 }

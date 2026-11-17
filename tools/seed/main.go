@@ -43,7 +43,7 @@ func run(addr, user, pass, dir string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if err := c.Login(user, pass).Wait(); err != nil {
 		return fmt.Errorf("login: %w", err)
 	}

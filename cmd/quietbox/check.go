@@ -21,7 +21,7 @@ func newCheckCmd(opts *options) *cobra.Command {
 				return err
 			}
 			if opts.verbose {
-				fmt.Fprintf(cmd.ErrOrStderr(), "connecting to %s:%d as %s (tls=%s)\n",
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "connecting to %s:%d as %s (tls=%s)\n",
 					cfg.IMAP.Host, cfg.IMAP.Port, cfg.IMAP.Username, cfg.IMAP.TLS)
 			}
 			b, err := imapbackend.Dial(cmd.Context(), imapbackend.Options{
@@ -31,13 +31,12 @@ func newCheckCmd(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer b.Close()
+			defer func() { _ = b.Close() }()
 			report, err := engine.Check(cmd.Context(), cfg, b)
 			if err != nil {
 				return err
 			}
-			report.Write(cmd.OutOrStdout())
-			return nil
+			return report.Write(cmd.OutOrStdout())
 		},
 	}
 }

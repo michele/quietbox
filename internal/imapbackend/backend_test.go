@@ -61,7 +61,7 @@ func fakeServer(t *testing.T) (host string, port int) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _ = conn.Write([]byte("* OK [CAPABILITY IMAP4rev1] ready\r\n"))
 		r := bufio.NewReader(conn)
 		for {

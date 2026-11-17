@@ -83,7 +83,9 @@ func TestCheckReport(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	r.Write(&buf)
+	if err := r.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
 	out := buf.String()
 	for _, want := range []string{"Message key: fallback", "SaneReceipts", "missing", "init will create it", "Warnings:"} {
 		if !strings.Contains(out, want) {
@@ -99,7 +101,7 @@ func TestCheckObjectID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	r.Write(&buf)
+	_ = r.Write(&buf)
 	if !r.ObjectID || !strings.Contains(buf.String(), "EMAILID") {
 		t.Errorf("expected EMAILID key strategy:\n%s", buf.String())
 	}
