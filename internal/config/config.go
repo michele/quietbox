@@ -116,8 +116,22 @@ func Load(path string) (*Config, error) {
 	return Parse(data, os.Getenv)
 }
 
+// LoadOffline is Load for commands that never connect to IMAP (e.g. `senders`):
+// everything is validated except that the password may be unset.
+func LoadOffline(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	return parse(data, os.Getenv, false)
+}
+
 // Parse decodes and validates config bytes. getenv supplies the password.
 func Parse(data []byte, getenv func(string) string) (*Config, error) {
+	return parse(data, getenv, true)
+}
+
+func parse(data []byte, getenv func(string) string, requirePassword bool) (*Config, error) {
 	cfg := Config{Learn: defaultLearn()}
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -140,7 +154,7 @@ func Parse(data []byte, getenv func(string) string) (*Config, error) {
 	}
 	cfg.IMAP.Password = getenv(PasswordEnv)
 	cfg.applyDefaults(getenv)
-	if err := cfg.validate(); err != nil {
+	if err := cfg.validate(requirePassword); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -192,7 +206,7 @@ func normaliseList(in []string) []string {
 	return out
 }
 
-func (c *Config) validate() error {
+func (c *Config) validate(requirePassword bool) error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 
@@ -211,7 +225,7 @@ func (c *Config) validate() error {
 	default:
 		add("imap.tls must be one of implicit, starttls, none (got %q)", c.IMAP.TLS)
 	}
-	if c.IMAP.Password == "" {
+	if requirePassword && c.IMAP.Password == "" {
 		add("%s is not set", PasswordEnv)
 	}
 

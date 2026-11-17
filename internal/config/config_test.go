@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +209,31 @@ func TestLearnOverridesAndErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), key) {
 			t.Errorf("%s: err = %v", key, err)
 		}
+	}
+}
+
+func TestLoadOfflineDoesNotNeedPassword(t *testing.T) {
+	path := t.TempDir() + "/c.toml"
+	if err := os.WriteFile(path, []byte(validBase), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(PasswordEnv, "")
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load must still require the password")
+	}
+	cfg, err := LoadOffline(path)
+	if err != nil {
+		t.Fatalf("LoadOffline: %v", err)
+	}
+	if cfg.State.Path == "" || len(cfg.Folders) != 2 {
+		t.Errorf("cfg = %+v", cfg)
+	}
+	// Everything else is still validated.
+	bad := strings.Replace(validBase, `type = "later"`, `type = "weird"`, 1)
+	if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOffline(path); err == nil {
+		t.Error("LoadOffline must still validate folders")
 	}
 }
