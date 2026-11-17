@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
@@ -56,10 +58,53 @@ type Folder struct {
 	Detect bool       `toml:"detect"`
 }
 
+// Me lists the addresses that are "you": they are excluded from sender stats.
+// Defaults to the IMAP username.
+type Me struct {
+	Addresses []string `toml:"addresses"`
+}
+
+// Learn tunes route learning (see docs/PLAN.md). Durations are written as
+// strings (e.g. "6mo") and parsed into the *Dur fields during validation.
+type Learn struct {
+	InboxLookback     string   `toml:"inbox_lookback"`
+	SentFolder        string   `toml:"sent_folder"`
+	Window            int      `toml:"window"`
+	HalfLife          string   `toml:"half_life"`
+	MixedShare        float64  `toml:"mixed_share"`
+	SentOverrideShare float64  `toml:"sent_override_share"`
+	DomainMinSenders  int      `toml:"domain_min_senders"`
+	DomainShare       float64  `toml:"domain_share"`
+	PersonalDomains   []string `toml:"personal_domains"`
+
+	InboxLookbackDur time.Duration `toml:"-"`
+	HalfLifeDur      time.Duration `toml:"-"`
+}
+
+// State locates the SQLite database.
+type State struct {
+	Path string `toml:"path"`
+}
+
 // Config is the whole configuration file.
 type Config struct {
 	IMAP    IMAP     `toml:"imap"`
+	Me      Me       `toml:"me"`
+	Learn   Learn    `toml:"learn"`
+	State   State    `toml:"state"`
 	Folders []Folder `toml:"folder"`
+}
+
+func defaultLearn() Learn {
+	return Learn{
+		InboxLookback:     "6mo",
+		Window:            20,
+		HalfLife:          "90d",
+		MixedShare:        0.2,
+		SentOverrideShare: 0.75,
+		DomainMinSenders:  3,
+		DomainShare:       0.8,
+	}
 }
 
 // Load reads and validates the config file at path.
@@ -73,7 +118,7 @@ func Load(path string) (*Config, error) {
 
 // Parse decodes and validates config bytes. getenv supplies the password.
 func Parse(data []byte, getenv func(string) string) (*Config, error) {
-	var cfg Config
+	cfg := Config{Learn: defaultLearn()}
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -94,14 +139,14 @@ func Parse(data []byte, getenv func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 	cfg.IMAP.Password = getenv(PasswordEnv)
-	cfg.applyDefaults()
+	cfg.applyDefaults(getenv)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
-func (c *Config) applyDefaults() {
+func (c *Config) applyDefaults(getenv func(string) string) {
 	if c.IMAP.TLS == "" {
 		c.IMAP.TLS = TLSImplicit
 	}
@@ -112,6 +157,39 @@ func (c *Config) applyDefaults() {
 			c.IMAP.Port = 143
 		}
 	}
+	c.Me.Addresses = normaliseList(c.Me.Addresses)
+	if len(c.Me.Addresses) == 0 && c.IMAP.Username != "" {
+		c.Me.Addresses = normaliseList([]string{c.IMAP.Username})
+	}
+	c.Learn.PersonalDomains = normaliseList(c.Learn.PersonalDomains)
+	if c.State.Path == "" {
+		c.State.Path = defaultStatePath(getenv)
+	}
+}
+
+func defaultStatePath(getenv func(string) string) string {
+	if dir := getenv("XDG_STATE_HOME"); dir != "" {
+		return filepath.Join(dir, "quietbox", "quietbox.db")
+	}
+	if home := getenv("HOME"); home != "" {
+		return filepath.Join(home, ".local", "state", "quietbox", "quietbox.db")
+	}
+	return "quietbox.db"
+}
+
+// normaliseList lower-cases, trims and de-duplicates, keeping first-seen order.
+func normaliseList(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, v := range in {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
 }
 
 func (c *Config) validate() error {
@@ -136,6 +214,8 @@ func (c *Config) validate() error {
 	if c.IMAP.Password == "" {
 		add("%s is not set", PasswordEnv)
 	}
+
+	c.validateLearn(add)
 
 	seen := map[string]bool{}
 	count := map[FolderType]int{}
@@ -254,4 +334,28 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func (c *Config) validateLearn(add func(string, ...any)) {
+	l := &c.Learn
+	var err error
+	if l.InboxLookbackDur, err = ParseDuration(l.InboxLookback); err != nil {
+		add("learn.inbox_lookback: %v", err)
+	}
+	if l.HalfLifeDur, err = ParseDuration(l.HalfLife); err != nil {
+		add("learn.half_life: %v", err)
+	}
+	if l.Window < 1 {
+		add("learn.window must be at least 1 (got %d)", l.Window)
+	}
+	if l.DomainMinSenders < 1 {
+		add("learn.domain_min_senders must be at least 1 (got %d)", l.DomainMinSenders)
+	}
+	for name, v := range map[string]float64{
+		"mixed_share": l.MixedShare, "sent_override_share": l.SentOverrideShare, "domain_share": l.DomainShare,
+	} {
+		if v <= 0 || v > 1 {
+			add("learn.%s must be in (0, 1] (got %v)", name, v)
+		}
+	}
 }

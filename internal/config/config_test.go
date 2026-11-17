@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const validBase = `
@@ -134,5 +135,78 @@ detect = true
 	w := cfg.Warnings()
 	if len(w) != 1 || !strings.Contains(w[0], "bulk") {
 		t.Errorf("warnings = %v", w)
+	}
+}
+
+func TestLearnDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(validBase), env(map[string]string{
+		"QUIETBOX_IMAP_PASSWORD": "secret",
+		"XDG_STATE_HOME":         "/state",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Me.Addresses; len(got) != 1 || got[0] != "me@example.com" {
+		t.Errorf("me.addresses = %v", got)
+	}
+	l := cfg.Learn
+	if l.InboxLookbackDur != 180*24*time.Hour || l.HalfLifeDur != 90*24*time.Hour {
+		t.Errorf("durations = %v %v", l.InboxLookbackDur, l.HalfLifeDur)
+	}
+	if l.Window != 20 || l.MixedShare != 0.2 || l.SentOverrideShare != 0.75 ||
+		l.DomainMinSenders != 3 || l.DomainShare != 0.8 {
+		t.Errorf("learn defaults = %+v", l)
+	}
+	if cfg.State.Path != "/state/quietbox/quietbox.db" {
+		t.Errorf("state path = %q", cfg.State.Path)
+	}
+}
+
+func TestStatePathFallbacks(t *testing.T) {
+	cfg, err := Parse([]byte(validBase), env(map[string]string{"QUIETBOX_IMAP_PASSWORD": "x", "HOME": "/h"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.State.Path != "/h/.local/state/quietbox/quietbox.db" {
+		t.Errorf("state path = %q", cfg.State.Path)
+	}
+}
+
+func TestMeAddressesNormalised(t *testing.T) {
+	src := validBase + "\n[me]\naddresses = [\"Me@Example.com\", \"Alias@Example.com\", \"me@example.com\"]\n"
+	cfg, err := Parse([]byte(src), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Me.Addresses; len(got) != 2 || got[0] != "me@example.com" || got[1] != "alias@example.com" {
+		t.Errorf("addresses = %v", got)
+	}
+}
+
+func TestLearnOverridesAndErrors(t *testing.T) {
+	ok := validBase + "\n[learn]\ninbox_lookback = \"1y\"\nwindow = 5\nsent_folder = \"Sent Items\"\npersonal_domains = [\"Family.Test\"]\n"
+	cfg, err := Parse([]byte(ok), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Learn.InboxLookbackDur != 365*24*time.Hour || cfg.Learn.Window != 5 ||
+		cfg.Learn.SentFolder != "Sent Items" || cfg.Learn.PersonalDomains[0] != "family.test" {
+		t.Errorf("learn = %+v", cfg.Learn)
+	}
+	bad := map[string]string{
+		"inbox_lookback":      `inbox_lookback = "soon"`,
+		"half_life":           `half_life = "0d"`,
+		"window":              `window = 0`,
+		"mixed_share":         `mixed_share = 1.5`,
+		"sent_override_share": `sent_override_share = 0`,
+		"domain_min_senders":  `domain_min_senders = 0`,
+		"domain_share":        `domain_share = 2`,
+		"nonsense":            `nonsense = 1`,
+	}
+	for key, line := range bad {
+		_, err := Parse([]byte(validBase+"\n[learn]\n"+line+"\n"), pw)
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: err = %v", key, err)
+		}
 	}
 }
