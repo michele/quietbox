@@ -1,0 +1,33 @@
+# Config for the docker test server (see docker-compose.test.yml).
+# The password comes from QUIETBOX_IMAP_PASSWORD (use "test").
+[imap]
+host = "127.0.0.1"
+port = 1143
+tls = "none"
+username = "me@quietbox.test"
+
+[[folder]]
+name = "INBOX"
+type = "important"
+
+[[folder]]
+name = "SaneLater"
+type = "later"
+
+[[folder]]
+name = "SaneNews"
+type = "newsletter"
+
+[[folder]]
+name = "SaneBulk"
+type = "bulk"
+
+# Second bulk folder that does not exist on the server: exercises the
+# "missing folder" row and the "no detect target" warning.
+[[folder]]
+name = "SaneReceipts"
+type = "bulk"
+
+[[folder]]
+name = "SaneBlackHole"
+type = "blackhole"
