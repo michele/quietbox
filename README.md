@@ -3,8 +3,9 @@
 A self-hosted, open-source alternative to SaneBox: a Go CLI/daemon that watches an IMAP
 mailbox and moves non-urgent mail out of the inbox, learning from the folders you move mail into.
 
-**Status: M0 (read-only skeleton).** Only `quietbox check` exists. quietbox does not move
-or change any mail yet. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+**Status: M1 (learning).** `check`, `init` and `senders` exist. quietbox learns where your mail goes
+today, but it does not move any mail yet; the only change it can make to your mailbox is creating
+configured folders that are missing. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Configuration
 
@@ -49,6 +50,27 @@ If a type has several folders, automatic detection only files mail into one of t
 exactly one sets `detect = true`; otherwise detection is off for that type and `check` warns.
 Unknown keys (including a `password` key) are errors.
 
+Optional sections (defaults shown):
+
+```toml
+[me]
+addresses = ["you@example.com"]   # your own addresses; default: imap.username
+
+[learn]
+inbox_lookback = "6mo"            # how far back INBOX is read (units: h, d, w, mo, y)
+sent_folder = ""                  # default: the folder the server marks \Sent
+window = 20                       # newest N messages per sender
+half_life = "90d"                 # recent mail counts more
+mixed_share = 0.2
+sent_override_share = 0.75
+domain_min_senders = 3
+domain_share = 0.8
+personal_domains = []             # extra domains that never get a domain default
+
+[state]
+path = ""                         # default: $XDG_STATE_HOME/quietbox/quietbox.db
+```
+
 ## Usage
 
 ```sh
@@ -60,6 +82,31 @@ QUIETBOX_IMAP_PASSWORD=... ./bin/quietbox check --config path/to/config.toml
 are available (otherwise it falls back to the `Message-ID` header), and shows which configured
 folders exist, their message counts and which folder is the detection target for each type.
 It is read-only.
+
+### Learning: `init` (alias `learn`)
+
+```sh
+quietbox init --dry-run     # see what it would do; changes nothing, still writes learn-report.csv
+quietbox init               # create missing folders (asks first), learn, save
+quietbox senders --mixed    # review what was learned (database only, no IMAP login)
+```
+
+`init` reads message **headers only**, in read-only mode: nothing is marked as read and no
+message body is downloaded. It scans the configured folders, Sent (the strongest "important"
+signal) and the last `inbox_lookback` of INBOX, works out a route for every sender, and writes
+`learn-report.csv` so you can review the result before any mail is ever moved. Re-running it is
+safe and rebuilds the learned data.
+
+| Flag | Meaning |
+|---|---|
+| `--dry-run` | no folders created, no database written |
+| `--yes`, `-y` | create missing folders without asking (without it, a non-interactive run skips creation) |
+| `--since 2y` | limit scan depth (INBOX is also capped by `inbox_lookback`) |
+| `--folder SaneNews` | re-learn one folder only (needs a previous full run) |
+| `--report path` | where to write the CSV (default `learn-report.csv`, mode 0600; empty to skip) |
+
+The report lists every sender with its route, whether it is **mixed** (it legitimately appears in
+more than one folder), how many messages it has in each folder, and why.
 
 ## Development
 

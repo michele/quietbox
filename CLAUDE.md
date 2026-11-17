@@ -31,6 +31,7 @@ cmd/quietbox/        cobra commands only: parse flags, call engine
 internal/mail/       Backend interface + Message/Folder types (no IMAP imports here)
 internal/imapbackend implementation of mail.Backend using go-imap v2
 internal/classify/   PURE functions: (message, sender stats, rules) -> Decision. No I/O.
+internal/learn/      PURE functions: observed filing history -> sender routes + domain defaults. No I/O.
 internal/store/      SQLite: senders, decisions, training events, audit log, schedules
 internal/engine/     orchestration: sync -> classify -> act -> record
 ```

@@ -115,13 +115,16 @@ last snapshot. A message that changed folder **and that quietbox didn't move its
 
 ## State (SQLite)
 
-- `folders(name, type, exists, last_scanned_at)`
+- `folders(name, type, present, last_scanned_at)` (`present`: `exists` is an SQL keyword)
 - `senders(address, domain, route_folder, route_source[learned|trained|detected], mixed, sent_to_count, updated_at)`
-- `sender_folder_counts(address, folder, count, last_seen)`: raw learning data
-- `domains(domain, default_folder, confidence)`
+- `observations(address, folder, internal_date)`: one row per message seen, no keys, subjects or bodies.
+  Recency weighting needs per-message dates, and re-learning one folder replaces just that folder's rows.
+  `sender_folder_counts` is a view over it.
+- `sent_to(address, count, last_sent)`: recipients found in Sent
+- `domains(domain, default_folder, senders, agreeing)`
 - `messages(key, folder, first_seen, last_seen)`: snapshot used to detect user moves
 - `decisions(message_key, folder, reason, at)`
-- `audit(id, message_key, from_folder, to_folder, reason, at, undone)`
+- `audit(id, action, message_key, from_folder, to_folder, reason, at, undone)`: `action` is `create_folder` in M1, moves from M3
 
 Message key: OBJECTID `EMAILID` → `Message-ID` header → hash(From, Date, Subject).
 
@@ -140,11 +143,30 @@ Each one ends with a demo against the docker test server and a tagged commit.
 - **Done when:** works against the test server and your real Fastmail.
 
 ### M1: `init` / `learn`
-- folder creation (the only mutation before M3), header scanning, Sent + INBOX scan
+- folder creation (the only mutation before M3): only with `--yes` or an interactive yes,
+  audit row written first
+- read-only header scanning (EXAMINE + `BODY.PEEK[HEADER.FIELDS]`, 1000 UIDs per FETCH),
+  Sent + INBOX scan
 - sender routes, mixed senders, domain defaults
-- `quietbox senders [--folder X] [--mixed]`, `learn-report.csv`
+- `quietbox senders [--folder X] [--mixed]` (database only), `learn-report.csv`
 - **Done when:** on your real mailbox the report matches your intuition and the
   runtime is acceptable (measure it; batch FETCH of headers only).
+
+Route resolution (`internal/learn`, thresholds in `[learn]`):
+1. Take a sender's newest `window` (20) observations, weight each by `0.5^(age / half_life)`
+   (`half_life` 90d); a folder's share is its weight over the total. Highest share wins; ties
+   prefer INBOX, then name. Mixed when another folder's share is at least `mixed_share` (0.2).
+2. Sent-to: INBOX, unless a non-INBOX folder has share at least `sent_override_share` (0.75)
+   and at least 3 messages.
+3. Domain default: at least `domain_min_senders` (3) senders and `domain_share` (0.8) of them on
+   one route. Mailbox-provider domains (gmail.com, outlook.com, yahoo.*, ...) and
+   `learn.personal_domains` never get one, and neither does the blackhole folder.
+4. INBOX is only read back `inbox_lookback` (6mo). Your own addresses (`[me]`) are skipped, and so
+   are messages without a parseable From. The same message twice in one folder counts once.
+
+Message keys are not persisted yet. go-imap v2 (beta.9) cannot fetch EMAILID, so `mail.Key`
+falls back to Message-ID, then the hash. **Prerequisite for M3:** fetch EMAILID before the audit
+log starts storing keys.
 
 ### M2: Detectors + shadow mode (still read-only)
 - `newsletter`, `bulk`, `later` detectors, table-tested with real header samples
