@@ -6,7 +6,6 @@ package imapbackend
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -162,12 +161,78 @@ func (b *Backend) Close() error {
 	return b.c.Close()
 }
 
-// FetchHeaders is implemented in a later commit of M1.
-func (b *Backend) FetchHeaders(context.Context, string, time.Time, func([]mail.Header) error) error {
-	return errors.New("imapbackend: FetchHeaders not implemented yet")
+// fetchBatch is how many messages one UID FETCH asks for (a var so tests can
+// force several batches).
+var fetchBatch = 1000
+
+// FetchHeaders streams the headers of every message in folder whose internal
+// date is on or after since (zero means all). The folder is opened read-only
+// (EXAMINE) and only BODY.PEEK[HEADER.FIELDS (...)] is requested, so no flag
+// (\Seen) ever changes and no body is downloaded.
+func (b *Backend) FetchHeaders(ctx context.Context, folder string, since time.Time, fn func([]mail.Header) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := b.c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+		return fmt.Errorf("open %q read-only: %w", folder, err)
+	}
+
+	crit := &imap.SearchCriteria{}
+	if !since.IsZero() {
+		// SINCE compares dates only, in the server's zone: widen by a day and
+		// filter exactly below.
+		crit.Since = since.AddDate(0, 0, -1)
+	}
+	found, err := b.c.UIDSearch(crit, nil).Wait()
+	if err != nil {
+		return fmt.Errorf("search %q: %w", folder, err)
+	}
+	uids := found.AllUIDs()
+
+	section := &imap.FetchItemBodySection{
+		Specifier:    imap.PartSpecifierHeader,
+		HeaderFields: headerFields,
+		Peek:         true,
+	}
+	opts := &imap.FetchOptions{UID: true, InternalDate: true, BodySection: []*imap.FetchItemBodySection{section}}
+
+	for start := 0; start < len(uids); start += fetchBatch {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := min(start+fetchBatch, len(uids))
+		bufs, err := b.c.Fetch(imap.UIDSetNum(uids[start:end]...), opts).Collect()
+		if err != nil {
+			return fmt.Errorf("fetch headers from %q: %w", folder, err)
+		}
+		batch := make([]mail.Header, 0, len(bufs))
+		for _, buf := range bufs {
+			if !since.IsZero() && buf.InternalDate.Before(since) {
+				continue
+			}
+			h := parseHeader(buf.FindBodySection(section), buf.InternalDate)
+			h.Folder = folder
+			batch = append(batch, h)
+		}
+		if len(batch) == 0 {
+			continue
+		}
+		if err := fn(batch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// CreateFolder is implemented in a later commit of M1.
-func (b *Backend) CreateFolder(context.Context, string) error {
-	return errors.New("imapbackend: CreateFolder not implemented yet")
+// CreateFolder creates a mailbox and subscribes to it, so that mail clients
+// show it. A failed subscription is not an error: the folder exists.
+func (b *Backend) CreateFolder(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := b.c.Create(name, nil).Wait(); err != nil {
+		return fmt.Errorf("create folder %q: %w", name, err)
+	}
+	_ = b.c.Subscribe(name).Wait()
+	return nil
 }
