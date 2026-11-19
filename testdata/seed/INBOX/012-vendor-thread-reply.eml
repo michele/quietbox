@@ -1,0 +1,14 @@
+From: vendor@supplier.test
+To: me@quietbox.test
+Subject: Re: Quote request
+Date: Sun, 24 May 2026 09:00:00 +0000
+Message-ID: <inbox-vendor-1@seed.quietbox.test>
+In-Reply-To: <sent-quote@seed.quietbox.test>
+References: <sent-quote@seed.quietbox.test>
+List-Unsubscribe: <mailto:unsub@supplier.test>
+Precedence: bulk
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Hello.

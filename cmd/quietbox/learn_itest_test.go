@@ -110,7 +110,7 @@ func serverState(t *testing.T, folders ...string) map[string]uint32 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = c.Close() }()
+	defer func() { _ = c.Logout().Wait(); _ = c.Close() }()
 	if err := c.Login("me@quietbox.test", "test").Wait(); err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +231,17 @@ func TestLearnEndToEnd(t *testing.T) {
 		"notifications@forge.test": {"SaneBulk", false},
 		"ricevute@negozio.test":    {"SaneBulk", false},
 		"spam@pushy.test":          {"SaneBlackHole", false},
+		// M2 fixtures: one message each, so never mixed.
+		"dana@colleagues.test":      {"INBOX", false},
+		"vendor@supplier.test":      {"INBOX", false},
+		"editor@weekly-digest.test": {"INBOX", false},
+		"noreply@pizzeria.test":     {"INBOX", false},
+		"offers@newbrand.test":      {"INBOX", false},
+		"quotes@supplier.test":      {"INBOX", false}, // only ever written to
+		"letters@freshpress.test":   {"SaneNews", false},
+		"quiet@indie.test":          {"SaneNews", false},
+		"noreply@shoplab.test":      {"SaneBulk", false},
+		"promo@deals.test":          {"SaneLater", false},
 	}
 	if len(got) != len(want) {
 		t.Errorf("learned %d senders, want %d", len(got), len(want))
@@ -334,7 +345,7 @@ func TestLearnEndToEnd(t *testing.T) {
 		t.Errorf("senders --mixed:\n%s", mixed)
 	}
 	news, _, err := e.run("", "senders", "--folder", "SaneNews")
-	if err != nil || !strings.Contains(news, "8 senders") || strings.Contains(news, "alice@") {
+	if err != nil || !strings.Contains(news, "10 senders") || strings.Contains(news, "alice@") {
 		t.Errorf("senders --folder SaneNews (err %v):\n%s", err, news)
 	}
 }

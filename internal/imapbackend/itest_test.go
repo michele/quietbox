@@ -50,7 +50,7 @@ func TestIntegrationCapabilitiesAndFolders(t *testing.T) {
 		got[f.Name] = f.Messages
 	}
 	want := map[string]uint32{
-		"INBOX": 10, "Sent": 4, "SaneNews": 16, "SaneBulk": 9, "SaneLater": 8, "SaneBlackHole": 2,
+		"INBOX": 15, "Sent": 5, "SaneNews": 18, "SaneBulk": 10, "SaneLater": 9, "SaneBlackHole": 2,
 	}
 	for name, n := range want {
 		if got[name] != n {
@@ -90,12 +90,12 @@ func collect(t *testing.T, b *Backend, ctx context.Context, folder string, since
 func TestIntegrationFetchHeadersAllAndBatches(t *testing.T) {
 	b, ctx := dial(t)
 	old := fetchBatch
-	fetchBatch = 4 // 16 messages => 4 batches
+	fetchBatch = 4 // 18 messages => 5 batches
 	t.Cleanup(func() { fetchBatch = old })
 
 	hs := collect(t, b, ctx, "SaneNews", time.Time{})
-	if len(hs) != 16 {
-		t.Fatalf("got %d headers, want 16", len(hs))
+	if len(hs) != 18 {
+		t.Fatalf("got %d headers, want 18", len(hs))
 	}
 	senders := map[string]int{}
 	for _, h := range hs {
@@ -119,8 +119,8 @@ func TestIntegrationFetchHeadersSinceAndEdgeCases(t *testing.T) {
 	b, ctx := dial(t)
 	since := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
 	hs := collect(t, b, ctx, "INBOX", since)
-	if len(hs) != 8 { // 10 in INBOX, 2 of them older than 6 months
-		t.Fatalf("got %d headers since %v, want 8", len(hs), since)
+	if len(hs) != 13 { // 15 in INBOX, 2 of them older than 6 months
+		t.Fatalf("got %d headers since %v, want 13", len(hs), since)
 	}
 	var noMID, encoded, replies int
 	for _, h := range hs {
@@ -151,7 +151,7 @@ func TestIntegrationFetchHeadersSinceAndEdgeCases(t *testing.T) {
 	for _, h := range sent {
 		recipients = append(recipients, h.To...)
 	}
-	if len(sent) != 4 || len(recipients) != 4 {
+	if len(sent) != 5 || len(recipients) != 5 { // 5th: the M2 fixture to quotes@supplier.test
 		t.Errorf("sent=%d recipients=%v", len(sent), recipients)
 	}
 	if err := b.FetchHeaders(ctx, "NoSuchFolder", time.Time{}, func([]mail.Header) error { return nil }); err == nil {

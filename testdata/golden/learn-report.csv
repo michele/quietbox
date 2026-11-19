@@ -1,0 +1,32 @@
+kind,address_or_domain,route_folder,route_source,mixed,sent_to,INBOX,SaneLater,SaneNews,SaneBulk,SaneBlackHole,QBLearn,last_seen,reason
+sender,alice@friends.test,INBOX,learned,false,1,3,0,0,0,0,0,2026-05-25,sent to sender 1 time(s)
+sender,bob@work.test,INBOX,learned,false,1,1,0,0,0,0,0,2026-05-14,sent to sender 1 time(s)
+sender,campaign@mcsv.test,SaneNews,learned,false,0,0,0,2,0,0,0,2026-04-12,learned: SaneNews 100%
+sender,carol@unknown.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-20,learned: INBOX 100%
+sender,dana@colleagues.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-21,learned: INBOX 100%
+sender,dave@old.test,INBOX,learned,false,1,0,0,0,0,0,0,2026-03-02,sent to sender 1 time(s)
+sender,digest@buttondown.test,SaneNews,learned,false,0,0,0,2,0,0,0,2026-04-14,learned: SaneNews 100%
+sender,drift@mixed.test,SaneNews,learned,true,0,0,3,2,0,0,0,2026-05-10,"learned: SaneNews 72%, SaneLater 28%"
+sender,editor@weekly-digest.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-25,learned: INBOX 100%
+sender,eve@club.test,SaneNews,learned,false,1,0,0,4,0,0,0,2026-04-15,"sent to sender 1 time(s), but SaneNews holds 100% of 4 messages"
+sender,fresh@substack.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-28,learned: INBOX 100%
+sender,letters@freshpress.test,SaneNews,learned,false,0,0,0,1,0,0,0,2026-05-23,learned: SaneNews 100%
+sender,noreply@pizzeria.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-27,learned: INBOX 100%
+sender,noreply@shop.test,SaneBulk,learned,false,0,0,0,0,2,0,0,2026-04-18,learned: SaneBulk 100%
+sender,noreply@shoplab.test,SaneBulk,learned,false,0,0,0,0,1,0,0,2026-05-21,learned: SaneBulk 100%
+sender,notifications@forge.test,SaneBulk,learned,false,0,0,0,0,2,0,0,2026-05-12,learned: SaneBulk 100%
+sender,offers@newbrand.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-22,learned: INBOX 100%
+sender,promo@deals.test,SaneLater,learned,false,0,0,1,0,0,0,0,2026-05-22,learned: SaneLater 100%
+sender,promos@travel.test,SaneLater,learned,true,0,1,3,0,0,0,0,2026-05-18,"learned: SaneLater 69%, INBOX 31%"
+sender,quiet@indie.test,SaneNews,learned,false,0,0,0,1,0,0,0,2026-05-24,learned: SaneNews 100%
+sender,quotes@supplier.test,INBOX,learned,false,1,0,0,0,0,0,0,2026-05-05,sent to sender 1 time(s)
+sender,ricevute@negozio.test,SaneBulk,learned,false,0,0,0,0,2,0,0,2026-05-06,learned: SaneBulk 100%
+sender,spam@pushy.test,SaneBlackHole,learned,false,0,0,0,0,0,2,0,2026-05-12,learned: SaneBlackHole 100%
+sender,store@bigstore.test,SaneBulk,learned,true,0,0,2,0,3,0,0,2026-04-16,"learned: SaneBulk 58%, SaneLater 42%"
+sender,vendor@supplier.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-24,learned: INBOX 100%
+sender,writer1@substack.test,SaneNews,learned,false,0,0,0,2,0,0,0,2026-05-06,learned: SaneNews 100%
+sender,writer2@substack.test,SaneNews,learned,false,0,0,0,2,0,0,0,2026-05-07,learned: SaneNews 100%
+sender,writer3@substack.test,SaneNews,learned,false,0,0,0,1,0,0,0,2026-04-09,learned: SaneNews 100%
+sender,writer4@substack.test,SaneNews,learned,false,0,0,0,1,0,0,0,2026-04-10,learned: SaneNews 100%
+sender,zoe@intl.test,INBOX,learned,false,0,1,0,0,0,0,0,2026-05-22,learned: INBOX 100%
+domain,substack.test,SaneNews,domain,false,,,,,,,,,4 of 5 senders route here
