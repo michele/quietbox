@@ -38,6 +38,77 @@ func TestParseHeaderBasic(t *testing.T) {
 	}
 }
 
+func TestParseHeaderThreading(t *testing.T) {
+	raw := "From: a@x.test\r\n" +
+		"In-Reply-To: <parent@x.test>\r\n" +
+		"References: <root@x.test>\r\n <parent@x.test>\r\n\r\n"
+	h := parseHeader([]byte(raw), internal)
+	if h.InReplyTo != "<parent@x.test>" {
+		t.Errorf("InReplyTo = %q", h.InReplyTo)
+	}
+	if got := h.References; len(got) != 2 || got[0] != "<root@x.test>" || got[1] != "<parent@x.test>" {
+		t.Errorf("References = %v", got)
+	}
+
+	// Some clients put a comment or several IDs in In-Reply-To: keep the first ID.
+	h = parseHeader([]byte("From: a@x.test\r\nIn-Reply-To: <one@x.test> <two@x.test>\r\n\r\n"), internal)
+	if h.InReplyTo != "<one@x.test>" {
+		t.Errorf("InReplyTo = %q, want first ID", h.InReplyTo)
+	}
+	h = parseHeader([]byte("From: a@x.test\r\n\r\n"), internal)
+	if h.InReplyTo != "" || len(h.References) != 0 {
+		t.Errorf("no threading headers: %+v", h)
+	}
+}
+
+func TestParseHeaderSignals(t *testing.T) {
+	raw := "From: news@mail.example.test\r\n" +
+		"List-Unsubscribe: <https://example.test/u/1>, <mailto:u@example.test>\r\n" +
+		"List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n" +
+		"Precedence: bulk\r\n" +
+		"Feedback-ID: 1:camp:example\r\n" +
+		"X-SES-Outgoing: 2026.05.20-54.240.1.1\r\n" +
+		"X-Unrelated: secret\r\n\r\n"
+	h := parseHeader([]byte(raw), internal)
+	want := map[string]string{
+		"list-unsubscribe":      "<https://example.test/u/1>, <mailto:u@example.test>",
+		"list-unsubscribe-post": "List-Unsubscribe=One-Click",
+		"precedence":            "bulk",
+		"feedback-id":           "1:camp:example",
+		"x-ses-outgoing":        "2026.05.20-54.240.1.1",
+	}
+	if len(h.Signals) != len(want) {
+		t.Fatalf("Signals = %v, want %v", h.Signals, want)
+	}
+	for k, v := range want {
+		if h.Signals[k] != v {
+			t.Errorf("Signals[%q] = %q, want %q", k, h.Signals[k], v)
+		}
+	}
+	if _, ok := h.Signals["x-unrelated"]; ok {
+		t.Error("non-whitelisted header leaked into Signals")
+	}
+}
+
+// Every Signals key must be requested from the server, and nothing else is:
+// the whitelist is the only thing standing between us and reading other headers.
+func TestHeaderFieldsMatchSignalWhitelist(t *testing.T) {
+	requested := map[string]bool{}
+	for _, f := range headerFields {
+		requested[canonical(f)] = true
+	}
+	for _, f := range signalFields {
+		if !requested[canonical(f)] {
+			t.Errorf("signal field %q is not in headerFields", f)
+		}
+	}
+	for _, f := range []string{"In-Reply-To", "References"} {
+		if !requested[canonical(f)] {
+			t.Errorf("%q is not requested", f)
+		}
+	}
+}
+
 func TestParseHeaderEncodedAndFolded(t *testing.T) {
 	subj := mime.QEncoding.Encode("utf-8", "Réunion à 15h")
 	raw := "From: =?UTF-8?B?Wm/DqyBNw7xsbGVy?= <zoe@intl.test>\r\n" +

@@ -45,7 +45,13 @@ type Header struct {
 	Subject      string
 	MessageID    string
 	ListID       string
-	EmailID      string // RFC 8474 EMAILID; empty until the backend can fetch it
+	EmailID      string   // RFC 8474 EMAILID; empty until the backend can fetch it
+	InReplyTo    string   // first Message-ID in In-Reply-To, "" if absent
+	References   []string // Message-IDs in References, oldest first
+	// Signals holds the whitelisted automation headers (List-Unsubscribe,
+	// Precedence, ESP markers, ...), keyed by lower-case name, values trimmed.
+	// Only headers the backend explicitly requests ever appear here.
+	Signals map[string]string
 }
 
 // Backend is the mailbox surface. Reads never change flags or messages.
