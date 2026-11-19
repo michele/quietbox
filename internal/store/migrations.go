@@ -54,4 +54,12 @@ CREATE VIEW sender_folder_counts AS
 	SELECT address, folder, COUNT(*) AS count, MAX(internal_date) AS last_seen
 	FROM observations GROUP BY address, folder;
 `,
+	// 2: Message-IDs of mail you sent, to recognise replies to your own mail
+	// (classification: "you're in the thread"). IDs only, never subjects.
+	`
+CREATE TABLE sent_message_ids (
+	message_id TEXT PRIMARY KEY,
+	sent_at    INTEGER NOT NULL
+);
+`,
 }

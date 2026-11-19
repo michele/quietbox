@@ -421,3 +421,41 @@ func TestLearnReportOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestLearnStoresSentMessageIDs(t *testing.T) {
+	st := openStore(t)
+	cfg := learnConfig(t, "")
+	if _, err := Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := st.SentMessageIDs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("sent IDs = %v", ids)
+	}
+	for _, id := range []string{"<sent1>", "<sent2>"} {
+		if _, ok := ids[id]; !ok {
+			t.Errorf("missing %s", id)
+		}
+	}
+
+	// Re-learning one folder must not touch the Sent-derived data.
+	if _, err := Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, Folder: "SaneNews"}); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := st.SentMessageIDs(context.Background()); len(ids) != 2 {
+		t.Errorf("scoped learn changed sent IDs: %v", ids)
+	}
+}
+
+func TestLearnDryRunStoresNoSentMessageIDs(t *testing.T) {
+	st := openStore(t)
+	if _, err := Learn(context.Background(), learnConfig(t, ""), miniMailbox(), st, LearnOptions{Now: learnNow, DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := st.SentMessageIDs(context.Background()); len(ids) != 0 {
+		t.Errorf("dry run stored %v", ids)
+	}
+}

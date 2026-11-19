@@ -130,6 +130,12 @@ type SentRow struct {
 	LastSent time.Time
 }
 
+// SentMsg is the Message-ID of one message in the Sent folder.
+type SentMsg struct {
+	MessageID string
+	At        time.Time
+}
+
 type FolderRow struct {
 	Name        string
 	Type        string
@@ -241,6 +247,28 @@ func (t *Tx) ReplaceSentTo(rows []SentRow) error {
 	return nil
 }
 
+// ReplaceSentMessageIDs replaces the whole sent_message_ids table. Empty IDs are
+// skipped and duplicates collapse.
+func (t *Tx) ReplaceSentMessageIDs(rows []SentMsg) error {
+	if _, err := t.tx.Exec("DELETE FROM sent_message_ids"); err != nil {
+		return err
+	}
+	stmt, err := t.tx.Prepare("INSERT OR IGNORE INTO sent_message_ids(message_id, sent_at) VALUES (?,?)")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, r := range rows {
+		if r.MessageID == "" {
+			continue
+		}
+		if _, err := stmt.Exec(r.MessageID, unix(r.At)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UpsertFolder records a configured folder's state.
 func (t *Tx) UpsertFolder(f FolderRow) error {
 	_, err := t.tx.Exec(`INSERT INTO folders(name, type, present, last_scanned_at) VALUES (?,?,?,?)
@@ -344,6 +372,24 @@ func (s *Store) Observations(context.Context) ([]Obs, error) { return queryObs(s
 
 // SentTo returns every sent_to row.
 func (s *Store) SentTo(context.Context) ([]SentRow, error) { return querySent(s.db) }
+
+// SentMessageIDs returns the Message-IDs of sent mail as a set.
+func (s *Store) SentMessageIDs(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT message_id FROM sent_message_ids")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = struct{}{}
+	}
+	return out, rows.Err()
+}
 
 // FolderCounts reads the sender_folder_counts view.
 func (s *Store) FolderCounts(ctx context.Context) ([]FolderCount, error) {

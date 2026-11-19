@@ -149,6 +149,60 @@ func TestSentTo(t *testing.T) {
 	}
 }
 
+func TestSentMessageIDs(t *testing.T) {
+	s := openTest(t)
+	err := s.Update(ctx, func(tx *Tx) error {
+		return tx.ReplaceSentMessageIDs([]SentMsg{{"<a@x.test>", at(3)}, {"<b@x.test>", at(4)}, {"<a@x.test>", at(3)}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SentMessageIDs(ctx)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	for _, id := range []string{"<a@x.test>", "<b@x.test>"} {
+		if _, ok := got[id]; !ok {
+			t.Errorf("missing %s", id)
+		}
+	}
+	// Replace is total.
+	_ = s.Update(ctx, func(tx *Tx) error { return tx.ReplaceSentMessageIDs([]SentMsg{{"<c@x.test>", at(5)}}) })
+	if got, _ := s.SentMessageIDs(ctx); len(got) != 1 {
+		t.Errorf("got %v", got)
+	}
+	// Empty message IDs are never stored.
+	_ = s.Update(ctx, func(tx *Tx) error { return tx.ReplaceSentMessageIDs([]SentMsg{{"", at(5)}}) })
+	if got, _ := s.SentMessageIDs(ctx); len(got) != 0 {
+		t.Errorf("empty id stored: %v", got)
+	}
+}
+
+func TestMigrationV2KeepsV1Data(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Update(ctx, func(tx *Tx) error { return tx.ReplaceSentTo([]SentRow{{"a@x.test", 2, at(3)}}) })
+	// Simulate a database left at schema v1.
+	if _, err := s.db.Exec("DROP TABLE sent_message_ids; PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	if got, _ := s.SentTo(ctx); len(got) != 1 {
+		t.Errorf("v1 data lost: %v", got)
+	}
+	if got, err := s.SentMessageIDs(ctx); err != nil || len(got) != 0 {
+		t.Errorf("new table: %v, %v", got, err)
+	}
+}
+
 func TestReplaceSendersKeepsTrained(t *testing.T) {
 	s := openTest(t)
 	first := []SenderRow{

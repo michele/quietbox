@@ -189,6 +189,7 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 	}
 
 	var sentRows []store.SentRow
+	var sentIDs []store.SentMsg
 	if scoped {
 		if sentRows, err = st.SentTo(ctx); err != nil {
 			return nil, err
@@ -211,6 +212,9 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 				when := h.Date
 				if when.IsZero() {
 					when = h.InternalDate
+				}
+				if h.MessageID != "" {
+					sentIDs = append(sentIDs, store.SentMsg{MessageID: h.MessageID, At: when})
 				}
 				once := map[string]bool{}
 				for _, to := range h.To {
@@ -335,6 +339,9 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 		}
 		if !scoped {
 			if err := tx.ReplaceSentTo(sentRows); err != nil {
+				return err
+			}
+			if err := tx.ReplaceSentMessageIDs(sentIDs); err != nil {
 				return err
 			}
 		}
