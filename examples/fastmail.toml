@@ -1,0 +1,46 @@
+# quietbox config for Fastmail. Only change `username` below.
+#
+# The password is NOT stored here (quietbox refuses a `password` key on purpose).
+# Create an app password in Fastmail: Settings > Privacy & Security > Integrations >
+# New app password, with access "Mail (IMAP)". Then set it in your shell:
+#
+#   export QUIETBOX_IMAP_PASSWORD='your-app-password'
+#
+# Usage:
+#   quietbox check --config examples/fastmail.toml
+#   quietbox init --dry-run --config examples/fastmail.toml
+
+[imap]
+host = "imap.fastmail.com"
+username = "you@example.com"   # <- your full Fastmail login address
+# port = 993                   # default; tls = "implicit" is the default too
+
+# Addresses that are "you" (aliases / custom domains). Defaults to the username.
+# [me]
+# addresses = ["you@example.com", "alias@yourdomain.com"]
+
+# Defaults are sensible; uncomment to tune.
+# [learn]
+# inbox_lookback = "6mo"
+
+# Folders. INBOX (important) and at least one "later" folder are required.
+# Missing folders are created by `quietbox init`, only after you confirm.
+[[folder]]
+name = "INBOX"
+type = "important"
+
+[[folder]]
+name = "SaneLater"
+type = "later"
+
+[[folder]]
+name = "SaneNews"
+type = "newsletter"
+
+[[folder]]
+name = "SaneBulk"        # receipts, notifications, order updates
+type = "bulk"
+
+[[folder]]
+name = "SaneBlackHole"   # optional: senders you never want to see again
+type = "blackhole"
