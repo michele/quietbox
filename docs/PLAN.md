@@ -103,7 +103,10 @@ detector may override it when it matches strongly (e.g. "Your order has shipped"
 5. type detectors (`newsletter`, then `bulk`, then `later`)
 6. no match → stays in INBOX
 
-Every decision records its **reason** (`quietbox explain <message>`).
+A learned sender route is checked before the thread rule, so a reply from a sender you have
+filed away stays filed; `quietbox eval` counts the cost of that as "hidden important".
+Every decision records its **rule**, **reason** and the detector **signals** behind it
+(`quietbox explain <message>` arrives in M4).
 
 ## Ongoing training
 
@@ -121,6 +124,8 @@ last snapshot. A message that changed folder **and that quietbox didn't move its
   Recency weighting needs per-message dates, and re-learning one folder replaces just that folder's rows.
   `sender_folder_counts` is a view over it.
 - `sent_to(address, count, last_sent)`: recipients found in Sent
+- `sent_message_ids(message_id, sent_at)`: Message-IDs of mail in Sent (schema v2), so a reply to
+  your own mail is recognised as "in the thread". IDs only, never subjects.
 - `domains(domain, default_folder, senders, agreeing)`
 - `messages(key, folder, first_seen, last_seen)`: snapshot used to detect user moves
 - `decisions(message_key, folder, reason, at)`
@@ -168,14 +173,43 @@ Message keys are not persisted yet. go-imap v2 (beta.9) cannot fetch EMAILID, so
 falls back to Message-ID, then the hash. **Prerequisite for M3:** fetch EMAILID before the audit
 log starts storing keys.
 
-### M2: Detectors + shadow mode (still read-only)
-- `newsletter`, `bulk`, `later` detectors, table-tested with real header samples
-- `quietbox scan --report`: what quietbox would do with INBOX mail, and why
-- **hold-out evaluation:** learn only from mail older than a cutoff date, then classify
-  mail received after it and compare with where SaneBox actually filed it. Known senders
-  will agree almost by construction, so report agreement **separately for new senders**:
-  that number measures the detectors.
-- **Done when:** new-sender agreement is good enough for you to trust it.
+### M2: Detectors + shadow mode (still read-only): implemented
+- `internal/classify`: pure detectors and `Classify`. Everything is table-tested; the detector
+  fixtures are **fabricated** header sets (several platforms and ESPs, English and Italian,
+  plus person-to-person negatives), not real samples, so the real-mail check is `quietbox eval`.
+  - Each detector returns a strength (`weak` = some evidence, `strong` = several independent
+    signals) and the signals that fired. Only `strong` can override a mixed sender's route.
+  - `newsletter`: `List-Id` (+ `List-Unsubscribe` = strong), or a newsletter-platform domain in
+    From or Return-Path (substack, beehiiv, buttondown, mailchimp, convertkit, ghost, mailerlite)
+    unless the sender is a `noreply@`-style system address. An unsubscribe header alone is not
+    a newsletter.
+  - `bulk`: `noreply`/`notifications`/`billing`/`orders`... local part or a transactional ESP
+    header (SES, Postmark, SendGrid, Mailgun); strong when a subject keyword (receipt, order,
+    invoice, shipped, ricevuta, ordine, fattura, spedizione...) agrees. A keyword alone never
+    fires, and mail with a `List-Id` is never bulk.
+  - `later`: `Precedence: bulk|list|junk`, `Auto-Submitted`, `List-Unsubscribe`, `Feedback-ID`,
+    marketing ESP headers, mass-mailer `X-Mailer`; two or more signals = strong.
+  - A detector whose type has no detection target (see `detect = true`) cannot fire and the
+    next one is tried. Own addresses and mail without a From are never moved.
+- `quietbox scan`: what quietbox would do with INBOX mail and why; `--csv`, `--limit`, `--all`.
+  It reads only and needs a previous `init`. (The plan called it `scan --report`; it is always a
+  report in M2, and acting on the result is `once`/`run` in M3.)
+- `quietbox eval` (hold-out evaluation): learn only from mail older than `--cutoff` (default 60
+  days ago; INBOX lookback and Sent are measured from the cutoff), classify mail received after
+  it, and compare with where it actually is. Known senders agree almost by construction, so the
+  report separates **new senders** (no history before the cutoff): that number measures the
+  detectors. It also prints a confusion matrix, agreement per rule, and **hidden important**
+  (INBOX mail quietbox would have filed away: the failure to watch). `--csv` lists the
+  disagreements. In memory only: no database, nothing written to the mailbox.
+- Message headers now also carry `In-Reply-To`, `References` and a whitelist of automation
+  headers (`Signals`). IMAP `HEADER.FIELDS` has no wildcards, so ESP markers are listed by name.
+- **Done when:** new-sender agreement on your real mailbox is good enough for you to trust it.
+  This part cannot be verified without your mailbox: run `quietbox eval` on it.
+
+Known limitation: `init` learns a route of INBOX for every sender who has mail in INBOX (that is
+what the history says), so `scan` on a mailbox that `init` has just read will mostly show
+"sender route to INBOX". Detectors matter for senders that appear after `init`. Whether an
+INBOX-only history should count as a learned route is something to decide from `eval` numbers.
 
 ### M3: Run for real
 - `quietbox run` (daemon, IDLE on INBOX) and `quietbox once` (cron)
@@ -202,6 +236,5 @@ log starts storing keys.
 
 ## Open questions
 
-- Default for mixed senders when the detectors don't fire: majority folder or INBOX?
 - Should `init` read Fastmail contacts (CardDAV) as an allowlist, or just a vCard file?
 - Inbox lookback default: is 6 months right for your mailbox?

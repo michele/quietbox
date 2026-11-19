@@ -3,9 +3,10 @@
 A self-hosted, open-source alternative to SaneBox: a Go CLI/daemon that watches an IMAP
 mailbox and moves non-urgent mail out of the inbox, learning from the folders you move mail into.
 
-**Status: M1 (learning).** `check`, `init` and `senders` exist. quietbox learns where your mail goes
-today, but it does not move any mail yet; the only change it can make to your mailbox is creating
-configured folders that are missing. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+**Status: M2 (shadow mode).** `check`, `init`, `senders`, `scan` and `eval` exist. quietbox learns
+where your mail goes today and can tell you what it *would* do with new mail, but it does not move
+any mail yet; the only change it can make to your mailbox is creating configured folders that are
+missing. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Configuration
 
@@ -107,6 +108,33 @@ safe and rebuilds the learned data.
 
 The report lists every sender with its route, whether it is **mixed** (it legitimately appears in
 more than one folder), how many messages it has in each folder, and why.
+
+### Shadow mode: `scan`
+
+```sh
+quietbox scan                    # what would happen to INBOX mail, and why
+quietbox scan --since 30d --all --csv scan.csv
+```
+
+`scan` classifies the mail in INBOX with what `init` learned and prints where each message would
+go (a learned sender route, a domain default, a reply in a thread you took part in, or a
+newsletter / bulk / later detector) with the reason. It only reads: it needs a previous `init`,
+writes nothing to the mailbox or the database, and its reports have sender addresses but never
+subjects or bodies. By default it lists the messages that would leave INBOX (newest 50); the
+totals always cover everything scanned.
+
+### How good would it be? `eval`
+
+```sh
+quietbox eval                          # learn from mail older than 60 days, test on the rest
+quietbox eval --cutoff 2026-03-01 --csv disagreements.csv
+```
+
+`eval` learns only from mail that arrived before the cutoff, then classifies the mail after it and
+compares with the folder that mail is actually in (where SaneBox or you put it). Senders it already
+knew agree almost by construction, so read the **new senders** line: it measures the detectors.
+**Hidden important** counts INBOX mail quietbox would have filed away, the failure to watch. It
+reads the mailbox and writes nothing (no database either).
 
 ## Development
 
