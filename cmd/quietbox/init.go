@@ -114,18 +114,8 @@ func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
 	return nil
 }
 
-func writeReport(rep *engine.LearnReport, path string) (err error) {
-	// 0600: the report lists the addresses you correspond with.
-	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("write report: %w", err)
-	}
-	defer func() {
-		if cerr := out.Close(); err == nil {
-			err = cerr
-		}
-	}()
-	return rep.WriteCSV(out)
+func writeReport(rep *engine.LearnReport, path string) error {
+	return writeCSVFile(path, rep.WriteCSV)
 }
 
 func parseNow(s string) (time.Time, error) {
