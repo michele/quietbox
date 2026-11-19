@@ -209,30 +209,11 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 					continue
 				}
 				seen[k] = struct{}{}
-				when := h.Date
-				if when.IsZero() {
-					when = h.InternalDate
-				}
+				when := sentWhen(h)
 				if h.MessageID != "" {
 					sentIDs = append(sentIDs, store.SentMsg{MessageID: h.MessageID, At: when})
 				}
-				once := map[string]bool{}
-				for _, to := range h.To {
-					to = strings.ToLower(to)
-					if to == "" || me[to] || once[to] {
-						continue
-					}
-					once[to] = true
-					row := sent[to]
-					if row == nil {
-						row = &store.SentRow{Address: to}
-						sent[to] = row
-					}
-					row.Count++
-					if when.After(row.LastSent) {
-						row.LastSent = when
-					}
-				}
+				addSentRecipients(sent, me, h, when)
 			}
 			return nil
 		})
@@ -262,39 +243,7 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 		}
 	}
 	p := learnParams(cfg)
-	byAddr := map[string][]learn.Observation{}
-	for _, ob := range allObs {
-		byAddr[ob.Address] = append(byAddr[ob.Address], learn.Observation{Folder: ob.Folder, At: ob.At})
-		s := rep.Stats[ob.Address]
-		if s.Counts == nil {
-			s.Counts = map[string]int{}
-		}
-		s.Counts[ob.Folder]++
-		if ob.At.After(s.LastSeen) {
-			s.LastSeen = ob.At
-		}
-		rep.Stats[ob.Address] = s
-	}
-	sentBy := map[string]int{}
-	for _, row := range sentRows {
-		sentBy[row.Address] = row.Count
-		if _, ok := byAddr[row.Address]; !ok {
-			byAddr[row.Address] = nil
-			rep.Stats[row.Address] = SenderStat{Counts: map[string]int{}, LastSeen: row.LastSent}
-		}
-	}
-	addrs := make([]string, 0, len(byAddr))
-	for a := range byAddr {
-		addrs = append(addrs, a)
-	}
-	sort.Strings(addrs)
-	for _, a := range addrs {
-		r := learn.Resolve(learn.SenderInput{Address: a, Obs: byAddr[a], SentTo: sentBy[a]}, p, o.Now)
-		if r.Folder != "" {
-			rep.Senders = append(rep.Senders, r)
-		}
-	}
-	rep.Domains = learn.DomainDefaults(rep.Senders, p)
+	rep.Senders, rep.Stats, rep.Domains = resolveRoutes(allObs, sentRows, p, o.Now)
 
 	for _, cf := range cfg.Folders {
 		rep.Folders = append(rep.Folders, FolderScan{
@@ -354,6 +303,77 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 		return nil, fmt.Errorf("save learned routes: %w", err)
 	}
 	return rep, nil
+}
+
+// resolveRoutes turns observed filing history and sent-to counts into a route
+// per sender (only senders with a learned route), the raw per-folder stats
+// behind them, and the domain defaults. It is shared by Learn and Eval.
+func resolveRoutes(obs []store.Obs, sent []store.SentRow, p learn.Params, now time.Time) ([]learn.Route, map[string]SenderStat, []learn.DomainRoute) {
+	stats := map[string]SenderStat{}
+	byAddr := map[string][]learn.Observation{}
+	for _, ob := range obs {
+		byAddr[ob.Address] = append(byAddr[ob.Address], learn.Observation{Folder: ob.Folder, At: ob.At})
+		s := stats[ob.Address]
+		if s.Counts == nil {
+			s.Counts = map[string]int{}
+		}
+		s.Counts[ob.Folder]++
+		if ob.At.After(s.LastSeen) {
+			s.LastSeen = ob.At
+		}
+		stats[ob.Address] = s
+	}
+	sentBy := map[string]int{}
+	for _, row := range sent {
+		sentBy[row.Address] = row.Count
+		if _, ok := byAddr[row.Address]; !ok {
+			byAddr[row.Address] = nil
+			stats[row.Address] = SenderStat{Counts: map[string]int{}, LastSeen: row.LastSent}
+		}
+	}
+	addrs := make([]string, 0, len(byAddr))
+	for a := range byAddr {
+		addrs = append(addrs, a)
+	}
+	sort.Strings(addrs)
+	var routes []learn.Route
+	for _, a := range addrs {
+		r := learn.Resolve(learn.SenderInput{Address: a, Obs: byAddr[a], SentTo: sentBy[a]}, p, now)
+		if r.Folder != "" {
+			routes = append(routes, r)
+		}
+	}
+	return routes, stats, learn.DomainDefaults(routes, p)
+}
+
+// sentWhen is when a sent message was written: its Date, else its arrival date.
+func sentWhen(h mail.Header) time.Time {
+	if h.Date.IsZero() {
+		return h.InternalDate
+	}
+	return h.Date
+}
+
+// addSentRecipients counts each distinct recipient of one sent message (never
+// your own addresses) into sent, keeping the latest send date.
+func addSentRecipients(sent map[string]*store.SentRow, me map[string]bool, h mail.Header, when time.Time) {
+	once := map[string]bool{}
+	for _, to := range h.To {
+		to = strings.ToLower(to)
+		if to == "" || me[to] || once[to] {
+			continue
+		}
+		once[to] = true
+		row := sent[to]
+		if row == nil {
+			row = &store.SentRow{Address: to}
+			sent[to] = row
+		}
+		row.Count++
+		if when.After(row.LastSent) {
+			row.LastSent = when
+		}
+	}
 }
 
 func isConfigured(cfg *config.Config, name string) bool {
