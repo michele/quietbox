@@ -150,3 +150,35 @@ func TestStrengthString(t *testing.T) {
 		}
 	}
 }
+
+// Signals end up in reports that may be pasted around, so they may only ever
+// contain words from the detectors' fixed vocabularies, never parts of an address
+// or free text from a header.
+func TestSignalsNeverContainAddressPartsOrFreeText(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func(mail.Header) Match
+		h    mail.Header
+		want string // must appear
+	}{
+		{"prefix-matched local part", DetectBulk, msg("billing.jsmith@x.test", "Fattura 12"), "billing"},
+		{"tagged noreply", DetectBulk, msg("noreply-jsmith@x.test", "Your receipt"), "noreply"},
+		{"plus tag", DetectBulk, msg("no-reply+jsmith@x.test", "Your receipt"), "no-reply"},
+		{"auto-submitted free text", DetectLater, msg("x@y.test", "Hi", "auto-submitted", "weird-jsmith-value"), "auto-submitted other"},
+		{"auto-submitted with parameters", DetectLater, msg("x@y.test", "Hi", "auto-submitted", "auto-generated; owner=jsmith"), "auto-submitted auto-generated"},
+		{"x-mailer free text", DetectLater, msg("x@y.test", "Hi", "x-mailer", "Mailchimp Mailer jsmith-build-77"), "x-mailer mailchimp"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := c.fn(c.h)
+			if !hasSignal(m, c.want) {
+				t.Fatalf("Signals = %v, want one containing %q", m.Signals, c.want)
+			}
+			for _, s := range m.Signals {
+				if strings.Contains(s, "jsmith") {
+					t.Errorf("signal %q leaks header or address text", s)
+				}
+			}
+		})
+	}
+}

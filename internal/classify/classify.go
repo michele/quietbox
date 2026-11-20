@@ -51,10 +51,11 @@ type Targets map[config.FolderType]string
 // Decision is where a message belongs and why. Folder is always set: it is
 // Knowledge.Inbox when the message should stay.
 type Decision struct {
-	Folder  string
-	Rule    Rule
-	Reason  string
-	Signals []string // detector evidence, if a detector was involved
+	Folder   string
+	Rule     Rule
+	Reason   string
+	Signals  []string // detector evidence, if a detector was involved
+	Strength Strength // detector strength; None for rules that are not detectors
 }
 
 type detector struct {
@@ -126,7 +127,7 @@ func Classify(h mail.Header, k Knowledge, t Targets) Decision {
 			continue
 		}
 		return Decision{
-			Folder: target, Rule: det.rule, Signals: m.Signals,
+			Folder: target, Rule: det.rule, Signals: m.Signals, Strength: m.Strength,
 			Reason: fmt.Sprintf("%s detector (%s): %s", det.typ, m.Strength, strings.Join(m.Signals, ", ")),
 		}
 	}
@@ -146,7 +147,7 @@ func mixedOverride(h mail.Header, r SenderRoute, t Targets) (Decision, bool) {
 			return Decision{}, false
 		}
 		return Decision{
-			Folder: target, Rule: RuleSenderOverride, Signals: m.Signals,
+			Folder: target, Rule: RuleSenderOverride, Signals: m.Signals, Strength: m.Strength,
 			Reason: fmt.Sprintf("mixed sender usually in %s, but strong %s match: %s",
 				r.Folder, det.typ, strings.Join(m.Signals, ", ")),
 		}, true

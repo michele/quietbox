@@ -143,3 +143,25 @@ func TestClassifyEmptyKnowledgeKeepsHumansInInbox(t *testing.T) {
 		}
 	}
 }
+
+func TestDecisionStrength(t *testing.T) {
+	k, tg := testKnowledge(), testTargets()
+	cases := []struct {
+		name string
+		h    mail.Header
+		want Strength
+	}{
+		{"strong newsletter", withListID(msg("n@new.test", "Issue", "list-unsubscribe", "<https://x.test/u>"), "N <n.test>"), Strong},
+		{"weak bulk", msg("alerts@forge.test", "Build finished"), Weak},
+		{"mixed override is strong", msg("store@big.test", "Your order #12 has shipped", "x-ses-outgoing", "1"), Strong},
+		{"sender route has no strength", msg("writer@paper.test", "Post"), None},
+		{"no rule has no strength", msg("stranger@somewhere.test", "Hello"), None},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Classify(c.h, k, tg).Strength; got != c.want {
+				t.Errorf("Strength = %v, want %v", got, c.want)
+			}
+		})
+	}
+}

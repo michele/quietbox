@@ -113,8 +113,8 @@ func DetectBulk(h mail.Header) Match {
 		return m
 	}
 	var automated []string
-	if l := localOf(h.From); transactionalLocal(h.From) {
-		automated = append(automated, "sender local part "+l)
+	if tok := transactionalToken(h.From); tok != "" {
+		automated = append(automated, "sender local part "+tok)
 	}
 	for _, k := range transactionalESP {
 		if has(h, k) {
@@ -141,7 +141,7 @@ func DetectLater(h mail.Header) Match {
 	if p := strings.ToLower(h.Signals["precedence"]); p == "bulk" || p == "list" || p == "junk" {
 		m.Signals = append(m.Signals, "precedence "+p)
 	}
-	if a := strings.ToLower(h.Signals["auto-submitted"]); a != "" && a != "no" {
+	if a := autoSubmitted(h.Signals["auto-submitted"]); a != "" {
 		m.Signals = append(m.Signals, "auto-submitted "+a)
 	}
 	for _, k := range []string{"list-unsubscribe", "feedback-id"} {
@@ -186,20 +186,41 @@ func localOf(addr string) string {
 	return local
 }
 
-func transactionalLocal(addr string) bool {
+func transactionalLocal(addr string) bool { return transactionalToken(addr) != "" }
+
+// transactionalToken returns the vocabulary word the sender's local part matches
+// ("" if none). Reports show this word, never the local part itself, which may
+// carry a person's name (billing.jsmith).
+func transactionalToken(addr string) string {
 	local := localOf(addr)
 	if local == "" {
-		return false
+		return ""
 	}
 	for _, t := range transactionalLocals {
 		if local == t {
-			return true
+			return t
 		}
 		if strings.HasPrefix(local, t) && strings.ContainsRune("-_.", rune(local[len(t)])) {
-			return true
+			return t
 		}
 	}
-	return false
+	return ""
+}
+
+var autoSubmittedValues = map[string]bool{"auto-generated": true, "auto-replied": true, "auto-notified": true}
+
+// autoSubmitted normalises an Auto-Submitted value to a known keyword, "other"
+// for anything else, and "" when the message is not auto-submitted (absent or "no").
+func autoSubmitted(v string) string {
+	v, _, _ = strings.Cut(strings.ToLower(strings.TrimSpace(v)), ";")
+	v = strings.TrimSpace(v)
+	switch {
+	case v == "" || v == "no":
+		return ""
+	case autoSubmittedValues[v]:
+		return v
+	}
+	return "other"
 }
 
 // domainOf extracts the lower-cased domain from an address or a header value
