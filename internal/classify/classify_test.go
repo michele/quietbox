@@ -167,3 +167,73 @@ func TestDecisionStrength(t *testing.T) {
 		})
 	}
 }
+
+// Policy experiments change what Classify does, never what it knows. The zero
+// Policy is the default behaviour, which every test above exercises.
+func TestPolicyThreadFirst(t *testing.T) {
+	reply := withReply(msg("replyer@helpdesk.test", "Re: ticket"), "<sent-1@me.test>")
+	k := testKnowledge()
+	if d := Classify(reply, k, testTargets()); d.Rule != RuleSender || d.Folder != "SaneBulk" {
+		t.Fatalf("default: %s via %s", d.Folder, d.Rule)
+	}
+	k.Policy.ThreadFirst = true
+	d := Classify(reply, k, testTargets())
+	if d.Folder != "INBOX" || d.Rule != RuleThread || !strings.Contains(d.Reason, "SaneBulk") {
+		t.Errorf("thread-first: %s via %s (%s), want INBOX via thread mentioning the route it beat", d.Folder, d.Rule, d.Reason)
+	}
+	// A blocked sender stays blocked, whatever it replies to.
+	blocked := withReply(msg("spam@pushy.test", "Re: x"), "<sent-1@me.test>")
+	if d := Classify(blocked, k, testTargets()); d.Rule != RuleBlackhole {
+		t.Errorf("blocked sender: %s via %s", d.Folder, d.Rule)
+	}
+	// Not a reply to your mail: unchanged.
+	other := withReply(msg("replyer@helpdesk.test", "Re: ticket"), "<not-mine@x.test>")
+	if d := Classify(other, k, testTargets()); d.Rule != RuleSender {
+		t.Errorf("reply to someone else's mail: %s via %s", d.Folder, d.Rule)
+	}
+}
+
+func TestPolicyNoMixedOverride(t *testing.T) {
+	h := msg("orders@shoplate.test", "Your order #12 has shipped")
+	k := testKnowledge()
+	if d := Classify(h, k, testTargets()); d.Rule != RuleSenderOverride {
+		t.Fatalf("default: %s via %s", d.Folder, d.Rule)
+	}
+	k.Policy.NoMixedOverride = true
+	if d := Classify(h, k, testTargets()); d.Rule != RuleSender || d.Folder != "SaneLater" {
+		t.Errorf("no-mixed-override: %s via %s, want the majority route SaneLater", d.Folder, d.Rule)
+	}
+}
+
+func TestPolicyOnlyStrong(t *testing.T) {
+	weak := msg("alerts@forge.test", "Build finished")
+	strong := msg("noreply@shop.test", "Your receipt")
+	k := testKnowledge()
+	if d := Classify(weak, k, testTargets()); d.Rule != RuleBulk {
+		t.Fatalf("default weak: %s via %s", d.Folder, d.Rule)
+	}
+	k.Policy.OnlyStrong = true
+	if d := Classify(weak, k, testTargets()); d.Folder != "INBOX" || d.Rule != RuleNone {
+		t.Errorf("only-strong, weak match: %s via %s, want INBOX", d.Folder, d.Rule)
+	}
+	if d := Classify(strong, k, testTargets()); d.Folder != "SaneBulk" || d.Rule != RuleBulk {
+		t.Errorf("only-strong, strong match: %s via %s, want SaneBulk", d.Folder, d.Rule)
+	}
+	// Learned knowledge is not detection: routes and domain defaults are untouched.
+	if d := Classify(msg("fresh@substack.test", "New"), k, testTargets()); d.Rule != RuleDomain {
+		t.Errorf("domain default under only-strong: %s via %s", d.Folder, d.Rule)
+	}
+	if d := Classify(msg("writer@paper.test", "Post"), k, testTargets()); d.Rule != RuleSender {
+		t.Errorf("sender route under only-strong: %s via %s", d.Folder, d.Rule)
+	}
+}
+
+func TestInThreadIsExported(t *testing.T) {
+	sent := map[string]struct{}{"<a@x.test>": {}}
+	if !InThread(mail.Header{InReplyTo: "<a@x.test>"}, sent) || !InThread(mail.Header{References: []string{"<z>", "<a@x.test>"}}, sent) {
+		t.Error("replies to sent mail must be in a thread")
+	}
+	if InThread(mail.Header{InReplyTo: "<b@x.test>"}, sent) || InThread(mail.Header{}, sent) || InThread(mail.Header{InReplyTo: "<a@x.test>"}, nil) {
+		t.Error("anything else must not be")
+	}
+}

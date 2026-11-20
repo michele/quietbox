@@ -32,6 +32,21 @@ type SenderRoute struct {
 	Reason string // why the route was learned, for explanations
 }
 
+// Policy holds experiments that change how Classify decides, not what it knows.
+// The zero value is the default behaviour. `quietbox eval` can switch them on to
+// measure their effect before any of them becomes a default.
+type Policy struct {
+	// ThreadFirst checks "reply in a thread you took part in" before a learned
+	// sender route (a blocked sender still wins).
+	ThreadFirst bool
+	// NoMixedOverride keeps a mixed sender's majority route even when a strong
+	// detector disagrees.
+	NoMixedOverride bool
+	// OnlyStrong lets detectors file mail from unknown senders only on a strong
+	// match; weak matches stay in INBOX.
+	OnlyStrong bool
+}
+
 // Knowledge is everything classification needs to know about the mailbox.
 // All address keys are lower-case.
 type Knowledge struct {
@@ -42,6 +57,7 @@ type Knowledge struct {
 	SentTo    map[string]bool        // addresses you have written to
 	SentIDs   map[string]struct{}    // Message-IDs of mail you sent
 	Me        map[string]bool        // your own addresses
+	Policy    Policy                 // experiments; zero = default behaviour
 }
 
 // Targets maps a detector type to the folder detection may file mail into.
@@ -99,7 +115,10 @@ func Classify(h mail.Header, k Knowledge, t Targets) Decision {
 		if k.Blackhole != "" && r.Folder == k.Blackhole {
 			return Decision{Folder: r.Folder, Rule: RuleBlackhole, Reason: "sender is blocked: " + r.Reason}
 		}
-		if r.Mixed {
+		if k.Policy.ThreadFirst && InThread(h, k.SentIDs) {
+			return stay(RuleThread, fmt.Sprintf("reply in a thread you took part in (before the %s route)", r.Folder))
+		}
+		if r.Mixed && !k.Policy.NoMixedOverride {
 			if d, ok := mixedOverride(h, r, t); ok {
 				return d
 			}
@@ -110,7 +129,7 @@ func Classify(h mail.Header, k Knowledge, t Targets) Decision {
 	if k.SentTo[from] {
 		return stay(RuleSentTo, "you have written to this sender")
 	}
-	if inThread(h, k.SentIDs) {
+	if InThread(h, k.SentIDs) {
 		return stay(RuleThread, "reply in a thread you took part in")
 	}
 
@@ -123,7 +142,7 @@ func Classify(h mail.Header, k Knowledge, t Targets) Decision {
 	for _, det := range detectors {
 		m := det.fn(h)
 		target := t[det.typ]
-		if m.Strength == None || target == "" {
+		if m.Strength == None || target == "" || (k.Policy.OnlyStrong && m.Strength != Strong) {
 			continue
 		}
 		return Decision{
@@ -155,9 +174,9 @@ func mixedOverride(h mail.Header, r SenderRoute, t Targets) (Decision, bool) {
 	return Decision{}, false
 }
 
-// inThread reports whether h replies to a message you sent (directly or
+// InThread reports whether h replies to a message you sent (directly or
 // anywhere up its References chain).
-func inThread(h mail.Header, sent map[string]struct{}) bool {
+func InThread(h mail.Header, sent map[string]struct{}) bool {
 	if len(sent) == 0 {
 		return false
 	}
