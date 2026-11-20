@@ -254,3 +254,133 @@ func TestAgreementPercent(t *testing.T) {
 		t.Errorf("1/3 = %v", p)
 	}
 }
+
+func TestEvalHarmSplit(t *testing.T) {
+	rep := runEval(t, evalMailbox())
+	// hidden: the newsletter left in INBOX. leaked: quiet@ and leak@ x2 stay in
+	// INBOX although filed. No message is filed in the wrong Sane folder.
+	if h := rep.Harm; h.Hidden != 1 || h.Leaked != 3 || h.CrossFiled != 0 {
+		t.Errorf("harm = %+v, want hidden 1, leaked 3, cross-filed 0", h)
+	}
+	if rep.Harm.Hidden != rep.HiddenImportant {
+		t.Errorf("Harm.Hidden %d != HiddenImportant %d", rep.Harm.Hidden, rep.HiddenImportant)
+	}
+	if rep.InboxAgreement.Total != 12 || rep.InboxAgreement.Agree != 8 {
+		t.Errorf("inbox-vs-not agreement = %+v, want 8/12", rep.InboxAgreement)
+	}
+	if got := rep.HiddenByRule[classify.RuleNewsletter]; got != 1 || len(rep.HiddenByRule) != 1 {
+		t.Errorf("HiddenByRule = %v", rep.HiddenByRule)
+	}
+}
+
+func TestEvalByRuleAndStrength(t *testing.T) {
+	rep := runEval(t, evalMailbox())
+	want := map[RuleKey]struct {
+		total, agree int
+		actual       map[string]int
+	}{
+		{classify.RuleNewsletter, classify.Strong}: {4, 3, map[string]int{"SaneNews": 3, "INBOX": 1}},
+		{classify.RuleLater, classify.Weak}:        {1, 1, map[string]int{"SaneLater": 1}},
+		{classify.RuleNone, classify.None}:         {4, 1, map[string]int{"INBOX": 1, "SaneNews": 1, "SaneBulk": 2}},
+		{classify.RuleThread, classify.None}:       {1, 1, map[string]int{"INBOX": 1}},
+		{classify.RuleSender, classify.None}:       {2, 2, map[string]int{"SaneNews": 1, "INBOX": 1}},
+	}
+	if len(rep.ByRuleStrength) != len(want) {
+		t.Errorf("ByRuleStrength has %d keys, want %d: %v", len(rep.ByRuleStrength), len(want), rep.ByRuleStrength)
+	}
+	for k, w := range want {
+		got := rep.ByRuleStrength[k]
+		if got.Total != w.total || got.Agree != w.agree {
+			t.Errorf("%v: %d/%d, want %d/%d", k, got.Agree, got.Total, w.agree, w.total)
+		}
+		for f, n := range w.actual {
+			if got.Actual[f] != n {
+				t.Errorf("%v: actual[%s] = %d, want %d", k, f, got.Actual[f], n)
+			}
+		}
+	}
+}
+
+func TestEvalSignalHistogramCoversNewSenderDetectorsOnly(t *testing.T) {
+	rep := runEval(t, evalMailbox())
+	want := []SignalCount{
+		{classify.RuleNewsletter, classify.Strong, "SaneNews", "list-id present; list-unsubscribe present", 3},
+		{classify.RuleLater, classify.Weak, "SaneLater", "precedence bulk", 1},
+		{classify.RuleNewsletter, classify.Strong, "INBOX", "list-id present; list-unsubscribe present", 1},
+	}
+	if len(rep.Signals) != len(want) {
+		t.Fatalf("Signals = %+v", rep.Signals)
+	}
+	for i, w := range want {
+		if rep.Signals[i] != w {
+			t.Errorf("Signals[%d] = %+v, want %+v", i, rep.Signals[i], w)
+		}
+	}
+}
+
+// harmMailbox: three known senders whose history says one thing and whose
+// post-cutoff mail sits elsewhere.
+func harmMailbox() *mailtest.Fake {
+	return &mailtest.Fake{
+		Caps: mail.Capabilities{"IMAP4REV1"},
+		Folders: []mail.Folder{
+			{Name: "INBOX"}, {Name: "SaneLater"}, {Name: "SaneNews"}, {Name: "SaneBulk"}, {Name: "SaneBlackHole"},
+			{Name: "Sent", Attrs: []string{`\Sent`}},
+		},
+		Messages: map[string][]mail.Header{
+			"INBOX": {
+				// mixed sender: SaneLater ~60%, INBOX ~40%
+				newMail("m@mix.test", 99, "<i1>", nil), newMail("m@mix.test", 94, "<i2>", nil),
+				newMail("m@mix.test", 20, "<i3>", nil),  // hidden, via a mixed sender's route
+				newMail("b@bulk.test", 21, "<i4>", nil), // hidden, via a plain route
+			},
+			"SaneLater": {
+				newMail("m@mix.test", 100, "<l1>", nil), newMail("m@mix.test", 95, "<l2>", nil), newMail("m@mix.test", 90, "<l3>", nil),
+				newMail("k@x.test", 100, "<l4>", nil), newMail("k@x.test", 95, "<l5>", nil), newMail("k@x.test", 90, "<l6>", nil),
+			},
+			"SaneBulk": {
+				newMail("b@bulk.test", 100, "<b1>", nil), newMail("b@bulk.test", 95, "<b2>", nil), newMail("b@bulk.test", 90, "<b3>", nil),
+				newMail("k@x.test", 22, "<b4>", nil), // history says SaneLater: filed in the wrong Sane folder
+			},
+			"Sent": {},
+		},
+	}
+}
+
+func TestEvalHarmCategoriesAndMixedSenders(t *testing.T) {
+	rep := runEval(t, harmMailbox())
+	if rep.Overall.Total != 3 || rep.Known.Total != 3 {
+		t.Fatalf("overall %+v known %+v, want 3 known messages", rep.Overall, rep.Known)
+	}
+	if h := rep.Harm; h.Hidden != 2 || h.Leaked != 0 || h.CrossFiled != 1 {
+		t.Errorf("harm = %+v, want hidden 2, leaked 0, cross-filed 1", h)
+	}
+	if rep.HiddenByRule[classify.RuleSender] != 2 || rep.HiddenSenderMixed != 1 {
+		t.Errorf("hidden by rule %v, of which mixed senders %d; want sender 2, mixed 1", rep.HiddenByRule, rep.HiddenSenderMixed)
+	}
+	// Filing in the wrong Sane folder is still "not in INBOX": only the two
+	// hidden messages disagree on the inbox question.
+	if rep.InboxAgreement.Total != 3 || rep.InboxAgreement.Agree != 1 {
+		t.Errorf("inbox-vs-not = %+v, want 1/3", rep.InboxAgreement)
+	}
+}
+
+func TestEvalReportShowsTheBreakdown(t *testing.T) {
+	var buf bytes.Buffer
+	if err := runEval(t, evalMailbox()).Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"hidden important", "leaked", "cross-filed", "inbox vs not", "By rule and strength",
+		"new-sender detector decisions", "list-id present; list-unsubscribe present", "precedence bulk",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
+	}
+	// The breakdown is meant to be pasted: no addresses.
+	if strings.Contains(out, "@") {
+		t.Errorf("report contains an address:\n%s", out)
+	}
+}

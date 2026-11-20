@@ -58,6 +58,38 @@ type EvalRow struct {
 	Actual    string // the folder the message is in
 	Decision  classify.Decision
 	NewSender bool // nothing in the history (and no mail sent to them) before the cutoff
+	Mixed     bool // the sender's learned route is mixed
+}
+
+// HarmCounts splits the disagreements by how much they hurt.
+type HarmCounts struct {
+	Hidden     int // in INBOX, quietbox would file it away: the serious one
+	Leaked     int // filed somewhere, quietbox would leave it in INBOX: mild
+	CrossFiled int // filed in a different Sane folder: out of INBOX either way
+}
+
+// RuleKey groups decisions by the rule that made them and, for detectors, how
+// sure the detector was.
+type RuleKey struct {
+	Rule     classify.Rule
+	Strength classify.Strength
+}
+
+// RuleStat is agreement for one RuleKey plus where those messages actually are.
+type RuleStat struct {
+	Agreement
+	Actual map[string]int
+}
+
+// SignalCount is how often a detector decision for a new sender had exactly these
+// signals while the message was actually in Actual. Signals come from the
+// detectors' fixed vocabularies: no addresses, subjects or header text.
+type SignalCount struct {
+	Rule     classify.Rule
+	Strength classify.Strength
+	Actual   string
+	Signals  string // sorted, joined with "; "
+	Count    int
 }
 
 // Agrees reports whether the prediction matches where the message is.
@@ -80,6 +112,17 @@ type EvalReport struct {
 	InboxTotal         int
 	HiddenImportant    int
 	HiddenImportantNew int
+
+	Harm HarmCounts
+	// InboxAgreement counts messages where "in INBOX or not" matches, ignoring
+	// which Sane folder: the question that matters most.
+	InboxAgreement Agreement
+	// HiddenByRule says which rule would have hidden each INBOX message;
+	// HiddenSenderMixed is the part of the sender rule that came from mixed senders.
+	HiddenByRule      map[classify.Rule]int
+	HiddenSenderMixed int
+	ByRuleStrength    map[RuleKey]RuleStat
+	Signals           []SignalCount // new-sender detector decisions, most common first
 
 	HistoryMessages int // messages learned from
 	SkippedSelf     int // test messages from your own addresses
@@ -127,7 +170,15 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 	rep := &EvalReport{
 		Cutoff: o.Cutoff, Inbox: p.InboxFolder,
 		ByRule: map[classify.Rule]Agreement{}, Confusion: map[string]map[string]int{},
+		HiddenByRule: map[classify.Rule]int{}, ByRuleStrength: map[RuleKey]RuleStat{},
 	}
+	type sigKey struct {
+		rule     classify.Rule
+		strength classify.Strength
+		actual   string
+		signals  string
+	}
+	sigCounts := map[sigKey]int{}
 
 	// 1. Read every configured folder once: before the cutoff is history, the
 	// rest is the test set.
@@ -241,9 +292,9 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 	for _, t := range tests {
 		d := classify.Classify(t.h, k, targets)
 		from := strings.ToLower(t.h.From)
-		_, known := k.Senders[from]
+		route, known := k.Senders[from]
 		row := EvalRow{Date: t.h.InternalDate, From: from, Actual: t.folder, Decision: d,
-			NewSender: !known && !k.SentTo[from]}
+			NewSender: !known && !k.SentTo[from], Mixed: route.Mixed}
 		rep.Rows = append(rep.Rows, row)
 
 		agree := row.Agrees()
@@ -260,16 +311,63 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 			rep.Confusion[row.Actual] = map[string]int{}
 		}
 		rep.Confusion[row.Actual][d.Folder]++
-		if row.Actual == rep.Inbox {
+		rk := RuleKey{d.Rule, d.Strength}
+		st := rep.ByRuleStrength[rk]
+		st.add(agree)
+		if st.Actual == nil {
+			st.Actual = map[string]int{}
+		}
+		st.Actual[row.Actual]++
+		rep.ByRuleStrength[rk] = st
+
+		actualInbox, predInbox := row.Actual == rep.Inbox, d.Folder == rep.Inbox
+		rep.InboxAgreement.add(actualInbox == predInbox)
+		switch {
+		case agree:
+		case actualInbox:
+			rep.Harm.Hidden++
+		case predInbox:
+			rep.Harm.Leaked++
+		default:
+			rep.Harm.CrossFiled++
+		}
+		if actualInbox {
 			rep.InboxTotal++
-			if d.Folder != rep.Inbox {
+			if !predInbox {
 				rep.HiddenImportant++
+				rep.HiddenByRule[d.Rule]++
+				if d.Rule == classify.RuleSender && row.Mixed {
+					rep.HiddenSenderMixed++
+				}
 				if row.NewSender {
 					rep.HiddenImportantNew++
 				}
 			}
 		}
+		if row.NewSender && (d.Rule == classify.RuleNewsletter || d.Rule == classify.RuleBulk || d.Rule == classify.RuleLater) {
+			sigs := append([]string(nil), d.Signals...)
+			sort.Strings(sigs)
+			sigCounts[sigKey{d.Rule, d.Strength, row.Actual, strings.Join(sigs, "; ")}]++
+		}
 	}
+	for k, n := range sigCounts {
+		rep.Signals = append(rep.Signals, SignalCount{k.rule, k.strength, k.actual, k.signals, n})
+	}
+	sort.Slice(rep.Signals, func(i, j int) bool {
+		a, c := rep.Signals[i], rep.Signals[j]
+		switch {
+		case a.Count != c.Count:
+			return a.Count > c.Count
+		case a.Rule != c.Rule:
+			return a.Rule < c.Rule
+		case a.Strength != c.Strength:
+			return a.Strength > c.Strength
+		case a.Actual != c.Actual:
+			return a.Actual < c.Actual
+		default:
+			return a.Signals < c.Signals
+		}
+	})
 	sort.SliceStable(rep.Rows, func(i, j int) bool {
 		a, c := rep.Rows[i], rep.Rows[j]
 		switch {
@@ -300,8 +398,27 @@ func (r *EvalReport) Write(w io.Writer) error {
 	fmt.Fprintf(&buf, "  agreement, known senders  %s\n", pct(r.Known))
 	fmt.Fprintf(&buf, "  agreement, new senders    %s   <- this measures the detectors\n\n", pct(r.New))
 
-	fmt.Fprintf(&buf, "Hidden important: %d of %d messages in %s would have been filed elsewhere (%d from new senders)\n\n",
+	disagree := r.Overall.Total - r.Overall.Agree
+	fmt.Fprintf(&buf, "Disagreements: %d, by how much they hurt\n", disagree)
+	fmt.Fprintf(&buf, "  hidden important  %4d  in %s, quietbox would file it away (the serious one)\n", r.Harm.Hidden, r.Inbox)
+	fmt.Fprintf(&buf, "  leaked            %4d  filed, quietbox would leave it in %s (mild)\n", r.Harm.Leaked, r.Inbox)
+	fmt.Fprintf(&buf, "  cross-filed       %4d  filed in a different folder, out of %s either way\n", r.Harm.CrossFiled, r.Inbox)
+	fmt.Fprintf(&buf, "  inbox vs not      %s   (ignores which folder)\n\n", pct(r.InboxAgreement))
+
+	fmt.Fprintf(&buf, "Hidden important: %d of %d messages in %s would have been filed elsewhere (%d from new senders)\n",
 		r.HiddenImportant, r.InboxTotal, r.Inbox, r.HiddenImportantNew)
+	if len(r.HiddenByRule) > 0 {
+		var parts []string
+		for _, rule := range sortedRules(r.HiddenByRule) {
+			part := fmt.Sprintf("%s %d", rule, r.HiddenByRule[classify.Rule(rule)])
+			if classify.Rule(rule) == classify.RuleSender && r.HiddenSenderMixed > 0 {
+				part += fmt.Sprintf(" (%d from mixed senders)", r.HiddenSenderMixed)
+			}
+			parts = append(parts, part)
+		}
+		fmt.Fprintf(&buf, "  by rule: %s\n", strings.Join(parts, ", "))
+	}
+	fmt.Fprintln(&buf)
 
 	fmt.Fprintln(&buf, "Where mail is (rows) vs where quietbox would file it (columns):")
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
@@ -321,19 +438,48 @@ func (r *EvalReport) Write(w io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintln(&buf, "\nBy rule:")
-	rules := make([]string, 0, len(r.ByRule))
-	for rule := range r.ByRule {
-		rules = append(rules, string(rule))
+	fmt.Fprintln(&buf, "\nBy rule and strength (where the messages actually are):")
+	keys := make([]RuleKey, 0, len(r.ByRuleStrength))
+	for k := range r.ByRuleStrength {
+		keys = append(keys, k)
 	}
-	sort.Strings(rules)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Rule != keys[j].Rule {
+			return keys[i].Rule < keys[j].Rule
+		}
+		return keys[i].Strength > keys[j].Strength
+	})
 	tw = tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "  RULE\tAGREE")
-	for _, rule := range rules {
-		_, _ = fmt.Fprintf(tw, "  %s\t%s\n", rule, pct(r.ByRule[classify.Rule(rule)]))
+	_, _ = fmt.Fprintln(tw, "  RULE\tSTRENGTH\tAGREE\tACTUAL FOLDER")
+	for _, k := range keys {
+		st := r.ByRuleStrength[k]
+		var where []string
+		for _, f := range r.Folders {
+			if n := st.Actual[f]; n > 0 {
+				where = append(where, fmt.Sprintf("%s:%d", f, n))
+			}
+		}
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", k.Rule, k.Strength, pct(st.Agreement), strings.Join(where, " "))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+
+	if len(r.Signals) > 0 {
+		const maxSignalRows = 40
+		fmt.Fprintln(&buf, "\nMost common new-sender detector decisions by signals (aggregate: no addresses or subjects):")
+		tw = tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "  COUNT\tRULE\tSTRENGTH\tACTUAL\tSIGNALS")
+		for i, sc := range r.Signals {
+			if i == maxSignalRows {
+				_, _ = fmt.Fprintf(tw, "  ...\t%d more combinations\t\t\t\n", len(r.Signals)-maxSignalRows)
+				break
+			}
+			_, _ = fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\t%s\n", sc.Count, sc.Rule, sc.Strength, sc.Actual, sc.Signals)
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
 	}
 	_, err := w.Write(buf.Bytes())
 	return err
@@ -359,4 +505,13 @@ func (r *EvalReport) WriteCSV(w io.Writer) error {
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+func sortedRules(m map[classify.Rule]int) []string {
+	out := make([]string, 0, len(m))
+	for r := range m {
+		out = append(out, string(r))
+	}
+	sort.Strings(out)
+	return out
 }
