@@ -19,11 +19,11 @@ type evalFlags struct {
 	now     string
 
 	// experiments: not defaults, only for measuring what they would change
-	threadFirst, noMixedOverride, onlyStrong bool
+	mixedOverride bool
 }
 
 func (f *evalFlags) policy() classify.Policy {
-	return classify.Policy{ThreadFirst: f.threadFirst, NoMixedOverride: f.noMixedOverride, OnlyStrong: f.onlyStrong}
+	return classify.Policy{MixedOverride: f.mixedOverride}
 }
 
 // defaultEvalCutoff is 60 days before now, at the start of that day (UTC).
@@ -48,9 +48,9 @@ your INBOX but quietbox would have filed away: the failure to watch.
 
 It reads the mailbox and writes nothing: no database, no folders, no flags.
 
-The --thread-first, --no-mixed-override and --only-strong flags switch on
-experiments so you can see what each would change (they are not defaults, and
-the report says which were on). Compare runs with the same --cutoff.
+--mixed-override switches on an experiment so you can see what it would change
+(it is not the default, and the report says when it was on). Compare runs with
+the same --cutoff.
 Reports contain sender addresses but never subjects or message bodies.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return runEval(cmd, opts, f) },
@@ -59,9 +59,7 @@ Reports contain sender addresses but never subjects or message bodies.`,
 	fl.StringVar(&f.cutoff, "cutoff", "", "learn from mail before this date (YYYY-MM-DD) and test on the rest (default: 60 days ago)")
 	fl.StringVar(&f.history, "history", "", "only learn from this long before the cutoff, e.g. 1y (default: everything; INBOX is capped by learn.inbox_lookback)")
 	fl.StringVar(&f.csv, "csv", "", "write the disagreements to this CSV file")
-	fl.BoolVar(&f.threadFirst, "thread-first", false, "experiment: a reply in a thread you took part in stays in INBOX even if the sender is filed elsewhere")
-	fl.BoolVar(&f.noMixedOverride, "no-mixed-override", false, "experiment: a mixed sender always follows its majority route")
-	fl.BoolVar(&f.onlyStrong, "only-strong", false, "experiment: detectors file mail from unknown senders only on a strong match")
+	fl.BoolVar(&f.mixedOverride, "mixed-override", false, "experiment: a strong detector match overrides a mixed sender's majority route (off by default)")
 	fl.StringVar(&f.now, "now", "", "treat this date (YYYY-MM-DD) as today; for tests and demos")
 	_ = fl.MarkHidden("now")
 	return cmd

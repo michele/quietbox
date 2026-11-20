@@ -50,15 +50,20 @@ func TestDefaultEvalCutoff(t *testing.T) {
 func TestEvalExperimentFlagsExist(t *testing.T) {
 	cfg, _ := scanConfig(t)
 	// A bad cutoff is reported before connecting; an unknown flag would be a cobra error.
-	_, err := execEval(t, "--config", cfg, "--thread-first", "--no-mixed-override", "--only-strong", "--cutoff", "last-month")
+	_, err := execEval(t, "--config", cfg, "--mixed-override", "--cutoff", "last-month")
 	if err == nil || !strings.Contains(err.Error(), "--cutoff") {
-		t.Errorf("err = %v, want the --cutoff error (so the experiment flags parsed)", err)
+		t.Errorf("err = %v, want the --cutoff error (so the experiment flag parsed)", err)
+	}
+	// The rejected experiments are gone.
+	for _, gone := range []string{"--thread-first", "--only-strong", "--no-mixed-override"} {
+		if _, err := execEval(t, "--config", cfg, gone); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+			t.Errorf("%s should no longer exist: %v", gone, err)
+		}
 	}
 }
 
 func TestEvalPolicyFromFlags(t *testing.T) {
-	p := (&evalFlags{threadFirst: true, onlyStrong: true}).policy()
-	if !p.ThreadFirst || p.NoMixedOverride || !p.OnlyStrong {
+	if p := (&evalFlags{mixedOverride: true}).policy(); !p.MixedOverride {
 		t.Errorf("policy = %+v", p)
 	}
 	if (&evalFlags{}).policy() != (classify.Policy{}) {

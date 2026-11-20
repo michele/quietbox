@@ -103,7 +103,7 @@ func TestScanClassifiesInbox(t *testing.T) {
 		"stranger@x.test":        {"INBOX", classify.RuleNone},
 		"spam@pushy.test":        {"SaneBlackHole", classify.RuleBlackhole},
 		"anon@elsewhere.test":    {"INBOX", classify.RuleThread},
-		"store@big.test":         {"SaneNews", classify.RuleSenderOverride},
+		"store@big.test":         {"SaneBulk", classify.RuleSender}, // mixed sender: majority route, the override is off by default
 		"me@example.test":        {"INBOX", classify.RuleNone},
 		"alice@friends.test":     {"INBOX", classify.RuleSender},
 	}

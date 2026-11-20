@@ -150,6 +150,11 @@ type EvalReport struct {
 	Policy      classify.Policy // experiments that were switched on
 	HiddenKnown HiddenKnown
 
+	// Thread sanity check: replies to mail you sent are protected by the thread
+	// rule, which depends on Message-ID matching working on real mail.
+	SentIDs       int // Message-IDs of mail sent before the cutoff
+	RepliesToSent int // test messages (any sender) that reply to one of them
+
 	HistoryMessages int // messages learned from
 	SkippedSelf     int // test messages from your own addresses
 	SkippedNoFrom   int // test messages without a usable From
@@ -319,7 +324,11 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 	targets := classify.Targets(cfg.DetectionTargets())
 
 	// 4. Classify the test set and compare.
+	rep.SentIDs = len(sentIDs)
 	for _, t := range tests {
+		if classify.InThread(t.h, sentIDs) {
+			rep.RepliesToSent++
+		}
 		d := classify.Classify(t.h, k, targets)
 		from := strings.ToLower(t.h.From)
 		route, known := k.Senders[from]
@@ -451,17 +460,11 @@ func (h *HiddenKnown) add(r EvalRow) {
 	}
 }
 
-// names lists the switched-on experiments in a fixed order.
+// policyNames lists the switched-on experiments in a fixed order.
 func policyNames(p classify.Policy) []string {
 	var out []string
-	if p.ThreadFirst {
-		out = append(out, "thread-first")
-	}
-	if p.NoMixedOverride {
-		out = append(out, "no-mixed-override")
-	}
-	if p.OnlyStrong {
-		out = append(out, "only-strong")
+	if p.MixedOverride {
+		out = append(out, "mixed-override")
 	}
 	return out
 }
@@ -477,6 +480,8 @@ func (r *EvalReport) Write(w io.Writer) error {
 		r.HistoryMessages, r.Cutoff.Format("2006-01-02"))
 	fmt.Fprintf(&buf, "then classified the %d messages received on or after it. Skipped: %d from your own addresses, %d without a From.\n",
 		r.Overall.Total, r.SkippedSelf, r.SkippedNoFrom)
+	fmt.Fprintf(&buf, "Thread check: %d sent Message-IDs learned before the cutoff; %d of the %d test messages reply to one of them (any sender)\n",
+		r.SentIDs, r.RepliesToSent, r.Overall.Total)
 	if names := policyNames(r.Policy); len(names) > 0 {
 		fmt.Fprintf(&buf, "Experiment: %s (not the defaults)\n", strings.Join(names, ", "))
 	}

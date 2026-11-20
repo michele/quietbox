@@ -36,15 +36,10 @@ type SenderRoute struct {
 // The zero value is the default behaviour. `quietbox eval` can switch them on to
 // measure their effect before any of them becomes a default.
 type Policy struct {
-	// ThreadFirst checks "reply in a thread you took part in" before a learned
-	// sender route (a blocked sender still wins).
-	ThreadFirst bool
-	// NoMixedOverride keeps a mixed sender's majority route even when a strong
-	// detector disagrees.
-	NoMixedOverride bool
-	// OnlyStrong lets detectors file mail from unknown senders only on a strong
-	// match; weak matches stay in INBOX.
-	OnlyStrong bool
+	// MixedOverride lets a strong detector match override a mixed sender's
+	// majority route. Off by default: on a real mailbox the override was right
+	// 1 time in 4 and hid INBOX mail.
+	MixedOverride bool
 }
 
 // Knowledge is everything classification needs to know about the mailbox.
@@ -91,7 +86,8 @@ var detectors = []detector{
 //
 //  1. sender is blocked                           -> blackhole
 //  2. sender has a learned/trained route          -> that folder
-//     (a mixed sender's route yields to a strong detector match)
+//     (with Policy.MixedOverride, a mixed sender's route yields to a strong
+//     detector match)
 //  3. you wrote to the sender, or it is a reply
 //     in a thread you took part in                -> INBOX
 //  4. domain default                              -> that folder
@@ -115,10 +111,7 @@ func Classify(h mail.Header, k Knowledge, t Targets) Decision {
 		if k.Blackhole != "" && r.Folder == k.Blackhole {
 			return Decision{Folder: r.Folder, Rule: RuleBlackhole, Reason: "sender is blocked: " + r.Reason}
 		}
-		if k.Policy.ThreadFirst && InThread(h, k.SentIDs) {
-			return stay(RuleThread, fmt.Sprintf("reply in a thread you took part in (before the %s route)", r.Folder))
-		}
-		if r.Mixed && !k.Policy.NoMixedOverride {
+		if r.Mixed && k.Policy.MixedOverride {
 			if d, ok := mixedOverride(h, r, t); ok {
 				return d
 			}
@@ -142,7 +135,7 @@ func Classify(h mail.Header, k Knowledge, t Targets) Decision {
 	for _, det := range detectors {
 		m := det.fn(h)
 		target := t[det.typ]
-		if m.Strength == None || target == "" || (k.Policy.OnlyStrong && m.Strength != Strong) {
+		if m.Strength == None || target == "" {
 			continue
 		}
 		return Decision{

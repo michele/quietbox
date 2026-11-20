@@ -385,7 +385,9 @@ func TestEvalReportShowsTheBreakdown(t *testing.T) {
 	}
 }
 
-// policyMailbox is built so that each experiment flips exactly one message.
+// policyMailbox: one known sender whose mail is a reply to something you sent (used
+// for the diagnostics), and one mixed sender whose strong bulk match the
+// mixed-override experiment acts on.
 func policyMailbox() *mailtest.Fake {
 	replyToMe := func(h *mail.Header) { h.InReplyTo = "<sent-h>" }
 	return &mailtest.Fake{
@@ -406,7 +408,7 @@ func policyMailbox() *mailtest.Fake {
 			},
 			"SaneBulk": {
 				newMail("h@help.test", 100, "<b1>", nil), newMail("h@help.test", 95, "<b2>", nil), newMail("h@help.test", 90, "<b3>", nil),
-				// mixed sender, strong bulk match: the default override files it in SaneBulk
+				// mixed sender, strong bulk match: only the override experiment files it here
 				newMail("orders@mix.test", 21, "<t2>", func(h *mail.Header) { h.Subject = "Your order has shipped" }),
 				// new sender, weak bulk match (noreply-style sender only)
 				newMail("alerts@forge.test", 22, "<t3>", nil),
@@ -425,45 +427,32 @@ func evalWith(t *testing.T, p classify.Policy) *EvalReport {
 	return rep
 }
 
-func TestEvalPolicyExperiments(t *testing.T) {
-	cases := []struct {
-		name   string
-		policy classify.Policy
-		agree  int
-		harm   HarmCounts
-		note   string
-	}{
-		{"default", classify.Policy{}, 2, HarmCounts{Hidden: 1}, "the reply is hidden by the sender route"},
-		{"thread-first", classify.Policy{ThreadFirst: true}, 3, HarmCounts{}, "the reply stays in INBOX"},
-		{"no mixed override", classify.Policy{NoMixedOverride: true}, 1, HarmCounts{Hidden: 1, CrossFiled: 1}, "the order mail follows the majority route"},
-		{"only strong", classify.Policy{OnlyStrong: true}, 1, HarmCounts{Hidden: 1, Leaked: 1}, "the weak noreply match stays in INBOX"},
-		{"all three", classify.Policy{ThreadFirst: true, NoMixedOverride: true, OnlyStrong: true}, 1, HarmCounts{Leaked: 1, CrossFiled: 1}, "each flips its own message"},
+func TestEvalMixedOverrideExperiment(t *testing.T) {
+	// Default: the mixed sender follows its majority route (SaneLater) although the
+	// message sits in SaneBulk: filed in the wrong Sane folder, out of INBOX either way.
+	def := evalWith(t, classify.Policy{})
+	if def.Overall.Total != 3 || def.Overall.Agree != 1 || def.Harm != (HarmCounts{Hidden: 1, CrossFiled: 1}) {
+		t.Errorf("default: agree %d/%d harm %+v, want 1/3 with hidden 1, cross-filed 1", def.Overall.Agree, def.Overall.Total, def.Harm)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			rep := evalWith(t, c.policy)
-			if rep.Overall.Total != 3 {
-				t.Fatalf("total = %d, want 3", rep.Overall.Total)
-			}
-			if rep.Overall.Agree != c.agree || rep.Harm != c.harm {
-				t.Errorf("agree %d harm %+v, want agree %d harm %+v (%s)", rep.Overall.Agree, rep.Harm, c.agree, c.harm, c.note)
-			}
-			if rep.Policy != c.policy {
-				t.Errorf("report policy = %+v", rep.Policy)
-			}
-		})
+	// Experiment: the strong bulk match overrides the route and agrees.
+	exp := evalWith(t, classify.Policy{MixedOverride: true})
+	if exp.Overall.Agree != 2 || exp.Harm != (HarmCounts{Hidden: 1}) {
+		t.Errorf("mixed-override: agree %d harm %+v, want 2/3 with hidden 1", exp.Overall.Agree, exp.Harm)
+	}
+	if exp.Policy != (classify.Policy{MixedOverride: true}) || def.Policy != (classify.Policy{}) {
+		t.Errorf("report policies = %+v / %+v", def.Policy, exp.Policy)
 	}
 }
 
 func TestEvalReportNamesActiveExperiments(t *testing.T) {
 	var plain, exp bytes.Buffer
 	_ = evalWith(t, classify.Policy{}).Write(&plain)
-	_ = evalWith(t, classify.Policy{ThreadFirst: true, OnlyStrong: true}).Write(&exp)
+	_ = evalWith(t, classify.Policy{MixedOverride: true}).Write(&exp)
 	if strings.Contains(plain.String(), "Experiment") {
 		t.Errorf("default run must not mention experiments:\n%s", plain.String())
 	}
-	if !strings.Contains(exp.String(), "Experiment: thread-first, only-strong") {
-		t.Errorf("experiment run must name its policies:\n%s", exp.String())
+	if !strings.Contains(exp.String(), "Experiment: mixed-override (not the defaults)") {
+		t.Errorf("experiment run must name its policy:\n%s", exp.String())
 	}
 }
 
@@ -502,5 +491,31 @@ func TestEvalHiddenKnownBucketsMixedAndNonReplies(t *testing.T) {
 	}
 	if hk.Hist3to9 != 2 {
 		t.Errorf("history buckets = %+v", hk)
+	}
+}
+
+// The thread rule protects replies to your mail from people you do not know yet.
+// If message-ID matching silently broke on real mail that protection would be gone
+// without any visible symptom, so the report shows the numbers behind it.
+func TestEvalThreadSanityLine(t *testing.T) {
+	rep := runEval(t, evalMailbox())
+	// Only <sent-pre> was sent before the cutoff; one test message replies to it
+	// (replier@else.test). The reply to <sent-post> must not count.
+	if rep.SentIDs != 1 || rep.RepliesToSent != 1 {
+		t.Errorf("SentIDs %d, RepliesToSent %d; want 1 and 1", rep.SentIDs, rep.RepliesToSent)
+	}
+	var buf bytes.Buffer
+	_ = rep.Write(&buf)
+	if want := "Thread check: 1 sent Message-IDs learned before the cutoff; 1 of the 12 test messages reply to one of them"; !strings.Contains(buf.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, buf.String())
+	}
+}
+
+func TestEvalThreadSanityLineCountsAnySender(t *testing.T) {
+	// h@help.test is a known sender and replies to <sent-h>: it counts even though
+	// the thread rule never needs to decide it.
+	rep := evalWith(t, classify.Policy{})
+	if rep.SentIDs != 1 || rep.RepliesToSent != 1 {
+		t.Errorf("SentIDs %d, RepliesToSent %d; want 1 and 1", rep.SentIDs, rep.RepliesToSent)
 	}
 }

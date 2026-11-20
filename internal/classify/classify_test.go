@@ -57,6 +57,8 @@ func TestClassify(t *testing.T) {
 		reasonHas string
 		// wantSignals: Decision.Signals must be non-empty (detector rules)
 		wantSignals bool
+		// override switches on the mixed-override experiment (off by default)
+		override bool
 	}{
 		// 1. blackhole
 		{name: "blocked sender", h: msg("spam@pushy.test", "Hello"), wantFolder: "SaneBlackHole", wantRule: RuleBlackhole},
@@ -71,11 +73,14 @@ func TestClassify(t *testing.T) {
 
 		// mixed senders: majority unless a detector is strong
 		{name: "mixed, nothing fires", h: msg("store@big.test", "Big sale"), wantFolder: "SaneLater", wantRule: RuleSender},
-		{name: "mixed, weak detector does not override", h: msg("orders@shoplate.test", "Hello"), wantFolder: "SaneLater", wantRule: RuleSender},
-		{name: "mixed, strong bulk overrides", h: msg("orders@shoplate.test", "Your order #12 has shipped"), wantFolder: "SaneBulk", wantRule: RuleSenderOverride, wantSignals: true, reasonHas: "SaneLater"},
-		{name: "mixed, strong detector agreeing with route is no override", h: msg("orders@bigbulk.test", "Your order #12 has shipped", "x-ses-outgoing", "1"), wantFolder: "SaneBulk", wantRule: RuleSender},
+		{name: "mixed, weak detector does not override", h: msg("orders@shoplate.test", "Hello"), wantFolder: "SaneLater", wantRule: RuleSender, override: true},
+		// On real mail the override was right 1 time in 4 and hid INBOX mail, so by
+		// default a mixed sender follows its majority route whatever the detectors say.
+		{name: "mixed, strong detector is ignored by default", h: msg("orders@shoplate.test", "Your order #12 has shipped"), wantFolder: "SaneLater", wantRule: RuleSender},
+		{name: "mixed, strong bulk overrides", h: msg("orders@shoplate.test", "Your order #12 has shipped"), wantFolder: "SaneBulk", wantRule: RuleSenderOverride, wantSignals: true, reasonHas: "SaneLater", override: true},
+		{name: "mixed, strong detector agreeing with route is no override", h: msg("orders@bigbulk.test", "Your order #12 has shipped", "x-ses-outgoing", "1"), wantFolder: "SaneBulk", wantRule: RuleSender, override: true},
 		{name: "mixed, strong override needs a target", h: msg("orders@shoplate.test", "Your order #12 has shipped"),
-			targets: Targets{config.TypeLater: "SaneLater"}, wantFolder: "SaneLater", wantRule: RuleSender},
+			targets: Targets{config.TypeLater: "SaneLater"}, wantFolder: "SaneLater", wantRule: RuleSender, override: true},
 
 		// 3. sent-to and thread
 		{name: "you wrote to them", h: msg("contact@vendor.test", "Quote", "x-ses-outgoing", "1"), wantFolder: "INBOX", wantRule: RuleSentTo},
@@ -118,7 +123,9 @@ func TestClassify(t *testing.T) {
 			if targets == nil {
 				targets = testTargets()
 			}
-			got := Classify(c.h, testKnowledge(), targets)
+			k := testKnowledge()
+			k.Policy.MixedOverride = c.override
+			got := Classify(c.h, k, targets)
 			if got.Folder != c.wantFolder || got.Rule != c.wantRule {
 				t.Fatalf("got %s via %s (%s), want %s via %s", got.Folder, got.Rule, got.Reason, c.wantFolder, c.wantRule)
 			}
@@ -148,6 +155,7 @@ func TestClassifyEmptyKnowledgeKeepsHumansInInbox(t *testing.T) {
 
 func TestDecisionStrength(t *testing.T) {
 	k, tg := testKnowledge(), testTargets()
+	k.Policy.MixedOverride = true // for the "mixed override" case; no other case involves a mixed sender
 	cases := []struct {
 		name string
 		h    mail.Header
@@ -169,62 +177,20 @@ func TestDecisionStrength(t *testing.T) {
 }
 
 // Policy experiments change what Classify does, never what it knows. The zero
-// Policy is the default behaviour, which every test above exercises.
-func TestPolicyThreadFirst(t *testing.T) {
-	reply := withReply(msg("replyer@helpdesk.test", "Re: ticket"), "<sent-1@me.test>")
-	k := testKnowledge()
-	if d := Classify(reply, k, testTargets()); d.Rule != RuleSender || d.Folder != "SaneBulk" {
-		t.Fatalf("default: %s via %s", d.Folder, d.Rule)
-	}
-	k.Policy.ThreadFirst = true
-	d := Classify(reply, k, testTargets())
-	if d.Folder != "INBOX" || d.Rule != RuleThread || !strings.Contains(d.Reason, "SaneBulk") {
-		t.Errorf("thread-first: %s via %s (%s), want INBOX via thread mentioning the route it beat", d.Folder, d.Rule, d.Reason)
-	}
-	// A blocked sender stays blocked, whatever it replies to.
-	blocked := withReply(msg("spam@pushy.test", "Re: x"), "<sent-1@me.test>")
-	if d := Classify(blocked, k, testTargets()); d.Rule != RuleBlackhole {
-		t.Errorf("blocked sender: %s via %s", d.Folder, d.Rule)
-	}
-	// Not a reply to your mail: unchanged.
-	other := withReply(msg("replyer@helpdesk.test", "Re: ticket"), "<not-mine@x.test>")
-	if d := Classify(other, k, testTargets()); d.Rule != RuleSender {
-		t.Errorf("reply to someone else's mail: %s via %s", d.Folder, d.Rule)
-	}
-}
-
-func TestPolicyNoMixedOverride(t *testing.T) {
+// Policy is the default behaviour, which the table above exercises.
+//
+// Two other experiments (thread-first, only-strong) were measured on a real
+// mailbox and rejected, so they no longer exist.
+func TestPolicyMixedOverride(t *testing.T) {
 	h := msg("orders@shoplate.test", "Your order #12 has shipped")
 	k := testKnowledge()
-	if d := Classify(h, k, testTargets()); d.Rule != RuleSenderOverride {
-		t.Fatalf("default: %s via %s", d.Folder, d.Rule)
-	}
-	k.Policy.NoMixedOverride = true
 	if d := Classify(h, k, testTargets()); d.Rule != RuleSender || d.Folder != "SaneLater" {
-		t.Errorf("no-mixed-override: %s via %s, want the majority route SaneLater", d.Folder, d.Rule)
+		t.Fatalf("default: %s via %s, want the majority route SaneLater", d.Folder, d.Rule)
 	}
-}
-
-func TestPolicyOnlyStrong(t *testing.T) {
-	weak := msg("alerts@forge.test", "Build finished")
-	strong := msg("noreply@shop.test", "Your receipt")
-	k := testKnowledge()
-	if d := Classify(weak, k, testTargets()); d.Rule != RuleBulk {
-		t.Fatalf("default weak: %s via %s", d.Folder, d.Rule)
-	}
-	k.Policy.OnlyStrong = true
-	if d := Classify(weak, k, testTargets()); d.Folder != "INBOX" || d.Rule != RuleNone {
-		t.Errorf("only-strong, weak match: %s via %s, want INBOX", d.Folder, d.Rule)
-	}
-	if d := Classify(strong, k, testTargets()); d.Folder != "SaneBulk" || d.Rule != RuleBulk {
-		t.Errorf("only-strong, strong match: %s via %s, want SaneBulk", d.Folder, d.Rule)
-	}
-	// Learned knowledge is not detection: routes and domain defaults are untouched.
-	if d := Classify(msg("fresh@substack.test", "New"), k, testTargets()); d.Rule != RuleDomain {
-		t.Errorf("domain default under only-strong: %s via %s", d.Folder, d.Rule)
-	}
-	if d := Classify(msg("writer@paper.test", "Post"), k, testTargets()); d.Rule != RuleSender {
-		t.Errorf("sender route under only-strong: %s via %s", d.Folder, d.Rule)
+	k.Policy.MixedOverride = true
+	d := Classify(h, k, testTargets())
+	if d.Rule != RuleSenderOverride || d.Folder != "SaneBulk" {
+		t.Errorf("mixed-override: %s via %s, want SaneBulk via sender_override", d.Folder, d.Rule)
 	}
 }
 
