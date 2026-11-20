@@ -186,7 +186,11 @@ func TestMigrationV2KeepsV1Data(t *testing.T) {
 	}
 	_ = s.Update(ctx, func(tx *Tx) error { return tx.ReplaceSentTo([]SentRow{{"a@x.test", 2, at(3)}}) })
 	// Simulate a database left at schema v1.
-	if _, err := s.db.Exec("DROP TABLE sent_message_ids; PRAGMA user_version = 1"); err != nil {
+	if _, err := s.db.Exec(`DROP TABLE sent_message_ids; DROP TABLE cursors;
+		ALTER TABLE audit DROP COLUMN status;
+		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
+		ALTER TABLE audit DROP COLUMN dest_uid;
+		PRAGMA user_version = 1`); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -324,5 +328,107 @@ func TestAuditSurvivesAndIsOrdered(t *testing.T) {
 	rows, err := s.Audit(ctx)
 	if err != nil || len(rows) != 2 || rows[0].ToFolder != "SaneReceipts" || rows[0].Undone {
 		t.Fatalf("audit = %+v, %v", rows, err)
+	}
+}
+
+func TestMigration3KeepsOldAuditRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a database left at schema v2 holding a create_folder row.
+	if _, err := s.db.Exec(`DROP TABLE cursors;
+		ALTER TABLE audit DROP COLUMN status;
+		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
+		ALTER TABLE audit DROP COLUMN dest_uid;
+		INSERT INTO audit(action, to_folder, reason, at) VALUES ('create_folder','X','r',1);
+		PRAGMA user_version = 2`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	rows, err := s.Audit(ctx)
+	if err != nil || len(rows) != 1 || rows[0].Status != AuditDone {
+		t.Fatalf("rows = %+v, %v", rows, err)
+	}
+}
+
+func TestAuditPlannedThenDone(t *testing.T) {
+	s := openTest(t)
+	id, err := s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "m:<a>", FromFolder: "INBOX", ToFolder: "News", Reason: "r", At: at(1), Status: AuditPlanned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.Audit(ctx)
+	if rows[0].Status != AuditPlanned {
+		t.Fatalf("status = %q", rows[0].Status)
+	}
+	if err := s.SetAuditResult(ctx, id, AuditDone, 7, 42); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = s.Audit(ctx)
+	if r := rows[0]; r.Status != AuditDone || r.DestUIDValidity != 7 || r.DestUID != 42 {
+		t.Fatalf("row = %+v", r)
+	}
+}
+
+func TestMovedKeysCountsEveryStatus(t *testing.T) {
+	s := openTest(t)
+	for i, st := range []string{AuditPlanned, AuditDone, AuditFailed} {
+		if _, err := s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "m:<" + st + ">", ToFolder: "F", Reason: "r", At: at(i + 1), Status: st}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, _ := s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "m:<undone>", ToFolder: "F", Reason: "r", At: at(5), Status: AuditDone})
+	if err := s.MarkUndone(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.AddAudit(ctx, AuditRow{Action: "create_folder", MessageKey: "m:<folder>", ToFolder: "F", Reason: "r", At: at(6)})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionUndoMove, MessageKey: "m:<undomove>", ToFolder: "F", Reason: "r", At: at(7)})
+	got, err := s.MovedKeys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("keys = %v", got)
+	}
+	for _, k := range []string{"m:<planned>", "m:<done>", "m:<failed>", "m:<undone>"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("missing %s", k)
+		}
+	}
+}
+
+func TestAuditSinceNewestFirstFiltersAction(t *testing.T) {
+	s := openTest(t)
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "old", Reason: "r", At: at(1), Status: AuditDone})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "a", Reason: "r", At: at(10), Status: AuditDone})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: "create_folder", Reason: "r", At: at(11)})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "b", Reason: "r", At: at(12), Status: AuditDone})
+	rows, err := s.AuditSince(ctx, at(5), ActionMove)
+	if err != nil || len(rows) != 2 || rows[0].MessageKey != "b" || rows[1].MessageKey != "a" {
+		t.Fatalf("rows = %+v, %v", rows, err)
+	}
+}
+
+func TestCursorRoundTrip(t *testing.T) {
+	s := openTest(t)
+	if _, ok, err := s.Cursor(ctx, "INBOX"); err != nil || ok {
+		t.Fatalf("missing cursor: ok=%v err=%v", ok, err)
+	}
+	if err := s.SetCursor(ctx, Cursor{Folder: "INBOX", UIDValidity: 3, NextUID: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetCursor(ctx, Cursor{Folder: "INBOX", UIDValidity: 3, NextUID: 15}); err != nil {
+		t.Fatal(err)
+	}
+	c, ok, err := s.Cursor(ctx, "INBOX")
+	if err != nil || !ok || c.NextUID != 15 || c.UIDValidity != 3 {
+		t.Fatalf("cursor = %+v ok=%v err=%v", c, ok, err)
 	}
 }
