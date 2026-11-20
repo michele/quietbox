@@ -140,14 +140,15 @@ combinations behind new-sender decisions. Those tables are aggregate (no address
 header text), so they are safe to paste when asking for help tuning. `eval` reads the mailbox and
 writes nothing (no database either).
 
-To measure a change before adopting it, `eval` can switch on experiments; the report names them and
-you compare runs with the same `--cutoff`:
+To measure a change before adopting it, `eval` can switch on an experiment; the report names it
+and you compare runs with the same `--cutoff`. There is one today:
 
 | Flag | What it tries |
 |---|---|
-| `--thread-first` | a reply in a thread you started stays in INBOX even if the sender is filed elsewhere |
-| `--no-mixed-override` | a mixed sender always follows its majority route |
-| `--only-strong` | detectors file mail from unknown senders only on a strong match |
+| `--mixed-override` | a strong detector match overrides a mixed sender's majority route (off by default: right 1 time in 4 on a real mailbox) |
+
+The report also has a "Thread check" line (how many of your sent Message-IDs were learned and how
+many test messages reply to one), so you can see that thread matching works on your mail.
 
 ## Development
 

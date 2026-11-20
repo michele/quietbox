@@ -91,13 +91,15 @@ Options: `--since 2y` to limit scan depth, `--folder SaneNews` to re-learn one f
 ### Mixed senders
 
 Some senders legitimately belong in two folders (Amazon: receipts in `bulk`, deals in
-`later`). For a mixed sender, the sender route is the default, and the per-message
-detector may override it when it matches strongly (e.g. "Your order has shipped" → `bulk`).
+`later`). A mixed sender follows its majority route. The idea of letting a strong per-message
+detector match override it (e.g. "Your order has shipped" → `bulk`) is implemented as an opt-in
+experiment (`eval --mixed-override`, `classify.Policy.MixedOverride`): on a real mailbox it was
+right 1 time in 4 and hid INBOX mail, so it is off by default.
 
 ## Classification order (first match wins)
 
 1. sender is blocked → `blackhole`
-2. sender has a learned/trained route → that folder (per-message override for mixed senders)
+2. sender has a learned/trained route → that folder (a mixed sender follows its majority route)
 3. you have sent mail to the sender, or you're in the thread → `important`
 4. domain default → that folder
 5. type detectors (`newsletter`, then `bulk`, then `later`)
@@ -178,7 +180,7 @@ log starts storing keys.
   fixtures are **fabricated** header sets (several platforms and ESPs, English and Italian,
   plus person-to-person negatives), not real samples, so the real-mail check is `quietbox eval`.
   - Each detector returns a strength (`weak` = some evidence, `strong` = several independent
-    signals) and the signals that fired. Only `strong` can override a mixed sender's route.
+    signals) and the signals that fired. `strong` matters only for the opt-in mixed-sender override.
   - `newsletter`: `List-Id` (+ `List-Unsubscribe` = strong); a newsletter-platform domain in From
     or Return-Path (substack, beehiiv, buttondown, mailchimp, convertkit, ghost, mailerlite); or
     `List-Unsubscribe` without a `List-Id` (weak, strong with `Precedence: bulk|list|junk`). System
@@ -209,12 +211,19 @@ log starts storing keys.
   `List-Unsubscribe` alone went to SaneNews 10 of 10, ESP-only mail was almost never Bulk, a
   `noreply`-style sender was Bulk 13 of 18, and `Feedback-ID` alone was noise. The test fixtures
   remain fabricated; the real check is always `eval` on a mailbox.
-- `eval` experiments (not defaults, the report names them): `--thread-first` (a reply in a thread
-  you started stays in INBOX even if the sender is filed elsewhere), `--no-mixed-override` (a
-  mixed sender always follows its majority route) and `--only-strong` (detectors file unknown
-  senders only on a strong match). `classify.Policy` carries them. For the hidden-important mail
-  from known senders it also reports how many were replies, how many replied to mail you sent,
-  route-share and history-size buckets, and how many were mixed senders.
+- `eval` experiments are never defaults and the report names them. Today there is one,
+  `--mixed-override` (see "Mixed senders"). Two others were measured on a real mailbox and
+  removed: `--thread-first` (no hidden message was a reply to mail you sent, so it changed
+  nothing) and `--only-strong` (hidden stayed the same, "leaked" went from 42 to 67).
+  `classify.Policy` carries the experiments. For the hidden-important mail from known senders
+  the report says how many were replies, how many replied to mail you sent, route-share and
+  history-size buckets, and how many were mixed senders. A "Thread check" line shows how many
+  sent Message-IDs were learned and how many test messages reply to one, as a sanity check that
+  thread matching works on real mail.
+- First real-mailbox result with the revised detectors (cutoff 2026-09-20, 813 test messages):
+  agreement 89%, new senders 69% (was 46%), cross-filed 76 -> 21, hidden important 30 of 311 INBOX
+  messages (25 from consistently-filed senders in a messy INBOX; a spot check found most of them
+  correctly filed), "leaked" 42 (mild: unknown senders left in INBOX).
 - Message headers now also carry `In-Reply-To`, `References` and a whitelist of automation
   headers (`Signals`). IMAP `HEADER.FIELDS` has no wildcards, so ESP markers are listed by name.
 - **Done when:** new-sender agreement on your real mailbox is good enough for you to trust it.
