@@ -202,7 +202,7 @@ type lateMail struct {
 func (l *lateMail) FetchFrom(ctx context.Context, folder string, from uint32, fn func([]mail.Header) error) error {
 	err := l.Fake.FetchFrom(ctx, folder, from, fn)
 	if folder == "INBOX" {
-		l.once.Do(func() { l.Fake.Append("INBOX", newMail("late@substack.test", 0, "<late2>", nil)) })
+		l.once.Do(func() { l.Append("INBOX", newMail("late@substack.test", 0, "<late2>", nil)) })
 	}
 	return err
 }
