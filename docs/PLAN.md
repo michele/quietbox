@@ -199,8 +199,11 @@ log starts storing keys.
   it, and compare with where it actually is. Known senders agree almost by construction, so the
   report separates **new senders** (no history before the cutoff): that number measures the
   detectors. It also prints a confusion matrix, agreement per rule, and **hidden important**
-  (INBOX mail quietbox would have filed away: the failure to watch). `--csv` lists the
-  disagreements. In memory only: no database, nothing written to the mailbox.
+  (INBOX mail quietbox would have filed away: the failure to watch). It also splits the
+  disagreements into hidden / leaked / cross-filed, attributes hidden-important to rules (and mixed
+  senders), and prints agreement per rule x strength and the commonest new-sender signal
+  combinations (fixed vocabularies only, so nothing personal). `--csv` lists the disagreements.
+  In memory only: no database, nothing written to the mailbox.
 - Message headers now also carry `In-Reply-To`, `References` and a whitelist of automation
   headers (`Signals`). IMAP `HEADER.FIELDS` has no wildcards, so ESP markers are listed by name.
 - **Done when:** new-sender agreement on your real mailbox is good enough for you to trust it.

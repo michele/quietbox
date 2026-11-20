@@ -133,8 +133,12 @@ quietbox eval --cutoff 2026-03-01 --csv disagreements.csv
 `eval` learns only from mail that arrived before the cutoff, then classifies the mail after it and
 compares with the folder that mail is actually in (where SaneBox or you put it). Senders it already
 knew agree almost by construction, so read the **new senders** line: it measures the detectors.
-**Hidden important** counts INBOX mail quietbox would have filed away, the failure to watch. It
-reads the mailbox and writes nothing (no database either).
+**Hidden important** counts INBOX mail quietbox would have filed away, the failure to watch. The
+report also splits all disagreements into hidden / leaked / cross-filed, says which rule caused each
+hidden message, and shows agreement per rule and detector strength plus the most common signal
+combinations behind new-sender decisions. Those tables are aggregate (no addresses, subjects or
+header text), so they are safe to paste when asking for help tuning. `eval` reads the mailbox and
+writes nothing (no database either).
 
 ## Development
 
