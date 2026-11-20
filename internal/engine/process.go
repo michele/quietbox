@@ -16,7 +16,8 @@ import (
 // ProcessOptions controls Process.
 type ProcessOptions struct {
 	Now      time.Time // "as of" for audit rows; zero means time.Now()
-	DryRun   bool      // report what would move; write nothing, move nothing
+	DryRun   bool      // report what would move; write nothing, move nothing, take no lock
+	LockHeld bool      // the caller already holds the instance lock (the run loop does)
 	Progress func(msg string)
 }
 
@@ -43,14 +44,27 @@ type ProcessReport struct {
 	Warnings []string
 }
 
+// LockPath is where the instance lock for a configuration lives.
+func LockPath(cfg *config.Config) string { return cfg.State.Path + ".lock" }
+
 // Process looks at the mail that arrived since the last pass and files it.
 // It is the one code path behind `quietbox once` and `quietbox run`.
+//
+// Order: lock, check the server can MOVE, reconcile interrupted moves, check
+// UIDVALIDITY, learn from new Sent mail, then file new INBOX mail.
 func Process(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.Store, o ProcessOptions) (*ProcessReport, error) {
 	if o.Now.IsZero() {
 		o.Now = time.Now()
 	}
 	if st == nil {
 		return nil, store.ErrNotInitialised
+	}
+	if !o.DryRun && !o.LockHeld {
+		release, err := AcquireLock(LockPath(cfg))
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 	}
 	caps, err := b.Capabilities(ctx)
 	if err != nil {
@@ -65,7 +79,19 @@ func Process(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.
 		return nil, errInitFirst
 	}
 	rep := &ProcessReport{}
-	if err := processInbox(ctx, cfg, b, st, o, rep); err != nil {
+	if !o.DryRun {
+		if err := reconcile(ctx, b, st, rep); err != nil {
+			return rep, err
+		}
+	}
+	k, targets, err := KnowledgeFromStore(ctx, cfg, st)
+	if err != nil {
+		return rep, err
+	}
+	if err := processSent(ctx, cfg, b, st, o, k, rep); err != nil {
+		return rep, err
+	}
+	if err := processInbox(ctx, b, st, cfg, o, k, targets, rep); err != nil {
 		return rep, err
 	}
 	return rep, nil
@@ -79,22 +105,128 @@ func progress(o ProcessOptions, format string, a ...any) {
 	}
 }
 
+// reconcile settles move rows left `planned` by an interrupted run: if the
+// message is in the destination folder the move happened, otherwise it did not.
+// Either way the row stays in the audit log, so the message is not moved again.
+func reconcile(ctx context.Context, b mail.Backend, st *store.Store, rep *ProcessReport) error {
+	planned, err := st.PlannedMoves(ctx)
+	if err != nil {
+		return err
+	}
+	for _, r := range planned {
+		status, validity, uid := store.AuditFailed, uint32(0), uint32(0)
+		if id, ok := strings.CutPrefix(r.MessageKey, "m:"); ok {
+			found, ok, err := b.Locate(ctx, r.ToFolder, 0, 0, id)
+			if err != nil {
+				return fmt.Errorf("reconcile audit row %d: %w", r.ID, err)
+			}
+			if ok {
+				fs, err := b.FolderStatus(ctx, r.ToFolder)
+				if err != nil {
+					return fmt.Errorf("reconcile audit row %d: %w", r.ID, err)
+				}
+				status, validity, uid = store.AuditDone, fs.UIDValidity, found
+			}
+		}
+		if err := st.SetAuditResult(ctx, r.ID, status, validity, uid); err != nil {
+			return err
+		}
+	}
+	if len(planned) > 0 {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("settled %d move(s) left unfinished by an interrupted run (see the audit log)", len(planned)))
+	}
+	return nil
+}
+
+// checkCursor returns a folder's cursor if it is still valid. When the server's
+// UIDVALIDITY changed, the stored UIDs mean nothing: it resets the cursor to the
+// folder's current end (unless dry-run), warns, and reports ok=false so the
+// caller skips the folder.
+func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, folder string, rep *ProcessReport) (cur store.Cursor, ok bool, err error) {
+	cur, found, err := st.Cursor(ctx, folder)
+	if err != nil {
+		return cur, false, err
+	}
+	if !found {
+		return cur, false, fmt.Errorf("no cursor for %s: run `quietbox init` first", folder)
+	}
+	fs, err := b.FolderStatus(ctx, folder)
+	if err != nil {
+		return cur, false, fmt.Errorf("status of %s: %w", folder, err)
+	}
+	if fs.UIDValidity == cur.UIDValidity {
+		return cur, true, nil
+	}
+	rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+		"%s was renumbered by the server (UIDVALIDITY changed): nothing was moved from it; run `quietbox init` to relearn", folder))
+	if !o.DryRun {
+		if err := st.SetCursor(ctx, store.Cursor{Folder: folder, UIDValidity: fs.UIDValidity, NextUID: fs.UIDNext}); err != nil {
+			return cur, false, err
+		}
+	}
+	return cur, false, nil
+}
+
+// processSent learns from mail you sent since the last pass: new recipients
+// count as "you wrote to them" and new Message-IDs make replies recognisable.
+// The Knowledge k is updated in memory even in a dry run, so a dry run decides
+// exactly as the real run would; only a real run persists it.
+func processSent(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.Store, o ProcessOptions, k classify.Knowledge, rep *ProcessReport) error {
+	server, err := b.ListFolders(ctx)
+	if err != nil {
+		return err
+	}
+	sentName, err := sentFolder(cfg, server)
+	if err != nil {
+		return err
+	}
+	cur, ok, err := checkCursor(ctx, b, st, o, sentName, rep)
+	if err != nil || !ok {
+		return err
+	}
+	sent := map[string]*store.SentRow{}
+	var ids []store.SentMsg
+	maxUID := cur.NextUID - 1
+	if err := b.FetchFrom(ctx, sentName, cur.NextUID, func(hs []mail.Header) error {
+		for _, h := range hs {
+			maxUID = max(maxUID, h.UID)
+			when := sentWhen(h)
+			if h.MessageID != "" {
+				ids = append(ids, store.SentMsg{MessageID: h.MessageID, At: when})
+				k.SentIDs[h.MessageID] = struct{}{}
+			}
+			addSentRecipients(sent, k.Me, h, when)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("fetch new mail from %s: %w", sentName, err)
+	}
+	rows := make([]store.SentRow, 0, len(sent))
+	for addr, r := range sent {
+		k.SentTo[addr] = true
+		rows = append(rows, *r)
+	}
+	if o.DryRun || maxUID < cur.NextUID {
+		return nil
+	}
+	cur.NextUID = maxUID + 1
+	return st.Update(ctx, func(tx *store.Tx) error {
+		if err := tx.AddSent(rows, ids); err != nil {
+			return err
+		}
+		return tx.SetCursor(cur)
+	})
+}
+
 // processInbox classifies and files new INBOX mail. Order of safety: the audit
 // row is committed (planned) before every MOVE, and the cursor advances only
 // after the whole batch, so an interrupted pass can be repeated: messages it
 // already moved are in the audit log and are skipped.
-func processInbox(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.Store, o ProcessOptions, rep *ProcessReport) error {
-	k, targets, err := KnowledgeFromStore(ctx, cfg, st)
-	if err != nil {
-		return err
-	}
+func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *config.Config, o ProcessOptions, k classify.Knowledge, targets classify.Targets, rep *ProcessReport) error {
 	inbox := k.Inbox
-	cur, ok, err := st.Cursor(ctx, inbox)
-	if err != nil {
+	cur, ok, err := checkCursor(ctx, b, st, o, inbox, rep)
+	if err != nil || !ok {
 		return err
-	}
-	if !ok {
-		return fmt.Errorf("no cursor for %s: run `quietbox init` first", inbox)
 	}
 	moved, err := st.MovedKeys(ctx) // moves from earlier passes only
 	if err != nil {

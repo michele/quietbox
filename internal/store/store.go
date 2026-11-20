@@ -272,6 +272,29 @@ func (t *Tx) ReplaceSentTo(rows []SentRow) error {
 	return nil
 }
 
+// AddSent merges newly seen sent mail into sent_to (counts add up, the latest
+// send date wins) and sent_message_ids (known IDs are kept), without touching
+// what is already there.
+func (t *Tx) AddSent(rows []SentRow, ids []SentMsg) error {
+	for _, r := range rows {
+		if _, err := t.tx.Exec(`INSERT INTO sent_to(address, count, last_sent) VALUES (?,?,?)
+			ON CONFLICT(address) DO UPDATE SET count = count + excluded.count, last_sent = MAX(last_sent, excluded.last_sent)`,
+			r.Address, r.Count, unix(r.LastSent)); err != nil {
+			return err
+		}
+	}
+	for _, m := range ids {
+		if m.MessageID == "" {
+			continue
+		}
+		if _, err := t.tx.Exec("INSERT OR IGNORE INTO sent_message_ids(message_id, sent_at) VALUES (?,?)",
+			m.MessageID, unix(m.At)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ReplaceSentMessageIDs replaces the whole sent_message_ids table. Empty IDs are
 // skipped and duplicates collapse.
 func (t *Tx) ReplaceSentMessageIDs(rows []SentMsg) error {
@@ -564,6 +587,17 @@ func (s *Store) SetAuditResult(ctx context.Context, id int64, status string, des
 		"UPDATE audit SET status = ?, dest_uidvalidity = ?, dest_uid = ? WHERE id = ?",
 		status, destUIDValidity, destUID, id)
 	return err
+}
+
+// PlannedMoves returns move rows whose outcome was never recorded (a run was
+// interrupted between the audit row and the end of the move), oldest first.
+func (s *Store) PlannedMoves(ctx context.Context) ([]AuditRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+auditCols+" FROM audit WHERE action = ? AND status = ? ORDER BY id", ActionMove, AuditPlanned)
+	if err != nil {
+		return nil, err
+	}
+	return scanAudit(rows)
 }
 
 // MarkUndone flags an audit row as reversed by `quietbox undo`.

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ func processBox(t *testing.T) (*mailtest.Fake, *store.Store, *config.Config) {
 	t.Helper()
 	fake, st, cfg := learnedMailbox(t)
 	fake.Caps = mailtest.CapsWithMove
+	cfg.State.Path = filepath.Join(t.TempDir(), "q.db") // the lock file lives next to it
 	return fake, st, cfg
 }
 
@@ -156,6 +158,7 @@ func TestProcessSkipsSeenAndFlagged(t *testing.T) {
 func TestProcessSkipRespectsConfig(t *testing.T) {
 	fake, st, _ := processBox(t)
 	cfg := learnConfig(t, "[run]\nskip_seen = false\nskip_flagged = false\n")
+	cfg.State.Path = filepath.Join(t.TempDir(), "q.db")
 	fake.Append("INBOX", newMail("seen@substack.test", 0, "<seen>", func(h *mail.Header) { h.Flags = []string{`\Seen`, `\Flagged`} }))
 	runProcess(t, fake, st, cfg, false)
 	if !inFolder(fake, "SaneNews", "<seen>") {
@@ -272,6 +275,7 @@ func TestProcessRefusesWithoutMove(t *testing.T) {
 
 func TestProcessNoCursorErrors(t *testing.T) {
 	cfg := learnConfig(t, "")
+	cfg.State.Path = filepath.Join(t.TempDir(), "q.db")
 	st := openStore(t)
 	_ = st.Update(bg, func(tx *store.Tx) error {
 		return tx.UpsertFolder(store.FolderRow{Name: "INBOX", Type: "important", Present: true})
@@ -281,5 +285,181 @@ func TestProcessNoCursorErrors(t *testing.T) {
 	_, err := Process(bg, cfg, fake, st, ProcessOptions{Now: learnNow})
 	if err == nil || !strings.Contains(err.Error(), "init") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestProcessUIDValidityChangeMovesNothing(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	fake.UIDValidity = map[string]uint32{"INBOX": 5}
+	rep := runProcess(t, fake, st, cfg, false)
+	if len(fake.Moves) != 0 || len(rep.Moves) != 0 {
+		t.Fatalf("moved mail although INBOX's UIDVALIDITY changed: %+v", rep.Moves)
+	}
+	if len(rep.Warnings) == 0 || !strings.Contains(rep.Warnings[0], "init") {
+		t.Errorf("warnings = %v, want one telling the user to re-run init", rep.Warnings)
+	}
+	c, _, _ := st.Cursor(bg, "INBOX")
+	if c.UIDValidity != 5 {
+		t.Errorf("cursor validity = %d, want it reset to 5", c.UIDValidity)
+	}
+	// After the reset only mail delivered from now on is processed.
+	fake.Append("INBOX", newMail("brandnew@substack.test", 0, "<brandnew>", nil))
+	again := runProcess(t, fake, st, cfg, false)
+	if len(again.Moves) != 1 || countFrom(fake, "SaneNews", "brandnew@substack.test") != 1 {
+		t.Errorf("after reset: moves = %+v", again.Moves)
+	}
+}
+
+func TestProcessSentUIDValidityChangeStillFilesInbox(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	fake.UIDValidity = map[string]uint32{"Sent": 9}
+	rep := runProcess(t, fake, st, cfg, false)
+	if len(rep.Moves) != 7 || len(rep.Warnings) != 1 {
+		t.Errorf("moves=%d warnings=%v", len(rep.Moves), rep.Warnings)
+	}
+}
+
+func TestProcessSentUpdatesKnowledge(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	// You just wrote to promo@store2.test: its mail must stay in INBOX now.
+	fake.Append("Sent", hdr("me@example.test", 0, "<s9>", "promo@store2.test", "Me@Example.test"))
+	runProcess(t, fake, st, cfg, false)
+	if countFrom(fake, "INBOX", "promo@store2.test") != 1 {
+		t.Error("mail from someone you just wrote to was filed away")
+	}
+	sent, _ := st.SentTo(bg)
+	found := false
+	for _, r := range sent {
+		if r.Address == "promo@store2.test" && r.Count == 1 {
+			found = true
+		}
+		if r.Address == "me@example.test" {
+			t.Error("own address recorded as a recipient")
+		}
+	}
+	if !found {
+		t.Errorf("sent_to = %+v", sent)
+	}
+	if ids, _ := st.SentMessageIDs(bg); len(ids) != 3 { // sent1, sent2 and the new one
+		t.Errorf("sent ids = %v", ids)
+	}
+	// Existing recipients keep their counts: this adds, it does not replace.
+	for _, r := range sent {
+		if r.Address == "alice@friends.test" && r.Count != 1 {
+			t.Errorf("alice count = %d", r.Count)
+		}
+	}
+	// The Sent cursor advanced: nothing is counted twice.
+	runProcess(t, fake, st, cfg, false)
+	for _, r := range mustSent(t, st) {
+		if r.Address == "promo@store2.test" && r.Count != 1 {
+			t.Errorf("promo count after second pass = %d", r.Count)
+		}
+	}
+}
+
+func mustSent(t *testing.T, st *store.Store) []store.SentRow {
+	t.Helper()
+	rows, err := st.SentTo(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+func TestProcessDryRunUsesSentButWritesNothing(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	fake.Append("Sent", hdr("me@example.test", 0, "<s9>", "promo@store2.test"))
+	sentCursor, _, _ := st.Cursor(bg, "Sent")
+	rep := runProcess(t, fake, st, cfg, true)
+	for _, m := range rep.Moves {
+		if m.Sender == "promo@store2.test" {
+			t.Error("dry run ignored the new Sent mail, so it would not match the real run")
+		}
+	}
+	if got, _, _ := st.Cursor(bg, "Sent"); got != sentCursor {
+		t.Error("dry run advanced the Sent cursor")
+	}
+	for _, r := range mustSent(t, st) {
+		if r.Address == "promo@store2.test" {
+			t.Error("dry run recorded a recipient")
+		}
+	}
+}
+
+func auditRow(t *testing.T, st *store.Store, id int64) store.AuditRow {
+	t.Helper()
+	rows, _ := st.Audit(bg)
+	for _, r := range rows {
+		if r.ID == id {
+			return r
+		}
+	}
+	t.Fatalf("no audit row %d", id)
+	return store.AuditRow{}
+}
+
+// Simulates a crash after the audit row was written but before the outcome was
+// recorded: the message either made it into the destination or it did not.
+func TestReconcilePlannedFound(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	uid := fake.Append("SaneBulk", mail.Header{From: "x@shop.test", MessageID: "<rec1>"})
+	id, _ := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: "m:<rec1>", FromFolder: "INBOX", ToFolder: "SaneBulk", Reason: "r", At: learnNow, Status: store.AuditPlanned})
+	runProcess(t, fake, st, cfg, false)
+	r := auditRow(t, st, id)
+	if r.Status != store.AuditDone || r.DestUID != uid || r.DestUIDValidity == 0 {
+		t.Errorf("row = %+v, want done with dest uid %d", r, uid)
+	}
+}
+
+func TestReconcilePlannedMissing(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	ghost, _ := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: "m:<ghost>", FromFolder: "INBOX", ToFolder: "SaneBulk", Reason: "r", At: learnNow, Status: store.AuditPlanned})
+	hashed, _ := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: "h:abc", FromFolder: "INBOX", ToFolder: "SaneBulk", Reason: "r", At: learnNow, Status: store.AuditPlanned})
+	rep := runProcess(t, fake, st, cfg, false)
+	if auditRow(t, st, ghost).Status != store.AuditFailed || auditRow(t, st, hashed).Status != store.AuditFailed {
+		t.Error("planned rows whose message is not in the destination must become failed")
+	}
+	if len(rep.Warnings) == 0 {
+		t.Error("reconciling interrupted moves should be reported")
+	}
+}
+
+func TestReconcileSkippedInDryRun(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	id, _ := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: "m:<ghost>", FromFolder: "INBOX", ToFolder: "SaneBulk", Reason: "r", At: learnNow, Status: store.AuditPlanned})
+	runProcess(t, fake, st, cfg, true)
+	if auditRow(t, st, id).Status != store.AuditPlanned {
+		t.Error("dry run changed an audit row")
+	}
+}
+
+func TestProcessFailsWhenLockedButDryRunDoesNot(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	release, err := AcquireLock(cfg.State.Path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := Process(bg, cfg, fake, st, ProcessOptions{Now: learnNow}); err == nil || !strings.Contains(err.Error(), "another quietbox") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(fake.Moves) != 0 {
+		t.Error("moved mail without holding the lock")
+	}
+	if _, err := Process(bg, cfg, fake, st, ProcessOptions{Now: learnNow, DryRun: true}); err != nil {
+		t.Fatalf("dry run should not need the lock: %v", err)
+	}
+}
+
+func TestProcessLockHeldByCallerIsNotTakenAgain(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	release, err := AcquireLock(cfg.State.Path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := Process(bg, cfg, fake, st, ProcessOptions{Now: learnNow, LockHeld: true}); err != nil {
+		t.Fatalf("LockHeld should skip locking: %v", err)
 	}
 }
