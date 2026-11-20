@@ -168,15 +168,40 @@ type FolderCount struct {
 	LastSeen time.Time
 }
 
+// Audit statuses. A mutation is recorded as planned before it runs.
+const (
+	AuditPlanned = "planned"
+	AuditDone    = "done"
+	AuditFailed  = "failed"
+)
+
+// Audit actions.
+const (
+	ActionCreateFolder = "create_folder"
+	ActionMove         = "move"
+	ActionUndoMove     = "undo_move"
+)
+
 type AuditRow struct {
-	ID         int64
-	Action     string
-	MessageKey string
-	FromFolder string
-	ToFolder   string
-	Reason     string
-	At         time.Time
-	Undone     bool
+	ID              int64
+	Action          string
+	MessageKey      string
+	FromFolder      string
+	ToFolder        string
+	Reason          string
+	At              time.Time
+	Undone          bool
+	Status          string // AuditPlanned | AuditDone | AuditFailed; "" is stored as done
+	DestUIDValidity uint32 // where a moved message landed (from COPYUID)
+	DestUID         uint32
+}
+
+// Cursor is where the next pass starts in a folder: UIDs below NextUID were
+// already handled. It is only valid while the folder's UIDVALIDITY matches.
+type Cursor struct {
+	Folder      string
+	UIDValidity uint32
+	NextUID     uint32
 }
 
 type SenderFilter struct {
@@ -241,6 +266,29 @@ func (t *Tx) ReplaceSentTo(rows []SentRow) error {
 	for _, r := range rows {
 		if _, err := t.tx.Exec("INSERT INTO sent_to(address, count, last_sent) VALUES (?,?,?)",
 			r.Address, r.Count, unix(r.LastSent)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddSent merges newly seen sent mail into sent_to (counts add up, the latest
+// send date wins) and sent_message_ids (known IDs are kept), without touching
+// what is already there.
+func (t *Tx) AddSent(rows []SentRow, ids []SentMsg) error {
+	for _, r := range rows {
+		if _, err := t.tx.Exec(`INSERT INTO sent_to(address, count, last_sent) VALUES (?,?,?)
+			ON CONFLICT(address) DO UPDATE SET count = count + excluded.count, last_sent = MAX(last_sent, excluded.last_sent)`,
+			r.Address, r.Count, unix(r.LastSent)); err != nil {
+			return err
+		}
+	}
+	for _, m := range ids {
+		if m.MessageID == "" {
+			continue
+		}
+		if _, err := t.tx.Exec("INSERT OR IGNORE INTO sent_message_ids(message_id, sent_at) VALUES (?,?)",
+			m.MessageID, unix(m.At)); err != nil {
 			return err
 		}
 	}
@@ -483,35 +531,123 @@ func (s *Store) Folders(ctx context.Context) ([]FolderRow, error) {
 // AddAudit appends an audit row and commits it immediately, on its own, so it
 // is durable before the mailbox action it describes is attempted.
 func (s *Store) AddAudit(ctx context.Context, a AuditRow) (int64, error) {
+	if a.Status == "" {
+		a.Status = AuditDone
+	}
 	res, err := s.db.ExecContext(ctx,
-		"INSERT INTO audit(action, message_key, from_folder, to_folder, reason, at) VALUES (?,?,?,?,?,?)",
-		a.Action, a.MessageKey, a.FromFolder, a.ToFolder, a.Reason, unix(a.At))
+		"INSERT INTO audit(action, message_key, from_folder, to_folder, reason, at, status, dest_uidvalidity, dest_uid) VALUES (?,?,?,?,?,?,?,?,?)",
+		a.Action, a.MessageKey, a.FromFolder, a.ToFolder, a.Reason, unix(a.At), a.Status, a.DestUIDValidity, a.DestUID)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
 }
 
-// Audit returns the audit log, oldest first.
-func (s *Store) Audit(ctx context.Context) ([]AuditRow, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, action, message_key, from_folder, to_folder, reason, at, undone FROM audit ORDER BY id")
-	if err != nil {
-		return nil, err
-	}
+const auditCols = "id, action, message_key, from_folder, to_folder, reason, at, undone, status, dest_uidvalidity, dest_uid"
+
+func scanAudit(rows *sql.Rows) ([]AuditRow, error) {
 	defer func() { _ = rows.Close() }()
 	var out []AuditRow
 	for rows.Next() {
 		var a AuditRow
 		var at int64
 		var undone int
-		if err := rows.Scan(&a.ID, &a.Action, &a.MessageKey, &a.FromFolder, &a.ToFolder, &a.Reason, &at, &undone); err != nil {
+		if err := rows.Scan(&a.ID, &a.Action, &a.MessageKey, &a.FromFolder, &a.ToFolder, &a.Reason, &at, &undone,
+			&a.Status, &a.DestUIDValidity, &a.DestUID); err != nil {
 			return nil, err
 		}
 		a.At, a.Undone = fromUnix(at), undone == 1
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// Audit returns the audit log, oldest first.
+func (s *Store) Audit(ctx context.Context) ([]AuditRow, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+auditCols+" FROM audit ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	return scanAudit(rows)
+}
+
+// AuditSince returns rows of one action recorded at or after since, newest first.
+func (s *Store) AuditSince(ctx context.Context, since time.Time, action string) ([]AuditRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+auditCols+" FROM audit WHERE action = ? AND at >= ? ORDER BY id DESC", action, unix(since))
+	if err != nil {
+		return nil, err
+	}
+	return scanAudit(rows)
+}
+
+// SetAuditResult records how a planned action ended and where a moved message landed.
+func (s *Store) SetAuditResult(ctx context.Context, id int64, status string, destUIDValidity, destUID uint32) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE audit SET status = ?, dest_uidvalidity = ?, dest_uid = ? WHERE id = ?",
+		status, destUIDValidity, destUID, id)
+	return err
+}
+
+// PlannedMoves returns move rows whose outcome was never recorded (a run was
+// interrupted between the audit row and the end of the move), oldest first.
+func (s *Store) PlannedMoves(ctx context.Context) ([]AuditRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+auditCols+" FROM audit WHERE action = ? AND status = ? ORDER BY id", ActionMove, AuditPlanned)
+	if err != nil {
+		return nil, err
+	}
+	return scanAudit(rows)
+}
+
+// MarkUndone flags an audit row as reversed by `quietbox undo`.
+func (s *Store) MarkUndone(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE audit SET undone = 1 WHERE id = ?", id)
+	return err
+}
+
+// MovedKeys returns the message key of every move ever recorded, whatever its
+// status and whether or not it was undone. Such a message is never moved again.
+func (s *Store) MovedKeys(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT message_key FROM audit WHERE action = ? AND message_key <> ''", ActionMove)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// SetCursor stores or replaces a folder's cursor inside the transaction.
+func (t *Tx) SetCursor(c Cursor) error {
+	_, err := t.tx.Exec(setCursorSQL, c.Folder, c.UIDValidity, c.NextUID)
+	return err
+}
+
+const setCursorSQL = "INSERT INTO cursors(folder, uidvalidity, next_uid) VALUES (?,?,?) ON CONFLICT(folder) DO UPDATE SET uidvalidity=excluded.uidvalidity, next_uid=excluded.next_uid"
+
+// Cursor returns the stored cursor for a folder; ok is false when there is none.
+func (s *Store) Cursor(ctx context.Context, folder string) (Cursor, bool, error) {
+	c := Cursor{Folder: folder}
+	err := s.db.QueryRowContext(ctx, "SELECT uidvalidity, next_uid FROM cursors WHERE folder = ?", folder).
+		Scan(&c.UIDValidity, &c.NextUID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, false, nil
+	}
+	return c, err == nil, err
+}
+
+// SetCursor stores or replaces a folder's cursor.
+func (s *Store) SetCursor(ctx context.Context, c Cursor) error {
+	_, err := s.db.ExecContext(ctx, setCursorSQL, c.Folder, c.UIDValidity, c.NextUID)
+	return err
 }
 
 func b2i(b bool) int {

@@ -3,10 +3,12 @@
 A self-hosted, open-source alternative to SaneBox: a Go CLI/daemon that watches an IMAP
 mailbox and moves non-urgent mail out of the inbox, learning from the folders you move mail into.
 
-**Status: M2 (shadow mode).** `check`, `init`, `senders`, `scan` and `eval` exist. quietbox learns
-where your mail goes today and can tell you what it *would* do with new mail, but it does not move
-any mail yet; the only change it can make to your mailbox is creating configured folders that are
-missing. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+**Status: M3 (run for real).** `check`, `init`, `senders`, `scan`, `eval`, `once`, `run` and `undo`
+exist. quietbox learns where your mail goes today (`init`), then files **new** INBOX mail as it
+arrives (`once` for cron, `run` as a daemon). It never deletes or expunges anything, every move is
+written to an audit log first, and `undo` reverses it. It does not yet learn from folders you move
+mail into (M4). **It has not been tried on a real provider yet**: it has been run end to end only
+against the Dovecot test server. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Configuration
 
@@ -67,6 +69,10 @@ sent_override_share = 0.75
 domain_min_senders = 3
 domain_share = 0.8
 personal_domains = []             # extra domains that never get a domain default
+
+[run]
+skip_seen = true                  # leave mail you have already read where it is
+skip_flagged = true               # leave flagged mail where it is
 
 [state]
 path = ""                         # default: $XDG_STATE_HOME/quietbox/quietbox.db
@@ -149,6 +155,40 @@ and you compare runs with the same `--cutoff`. There is one today:
 
 The report also has a "Thread check" line (how many of your sent Message-IDs were learned and how
 many test messages reply to one), so you can see that thread matching works on your mail.
+
+### Moving mail: `once`, `run`, `undo`
+
+```sh
+quietbox once --dry-run     # what would be filed right now; changes nothing
+quietbox once               # file what arrived since the last run, then exit (cron)
+quietbox run                # stay running: IDLE on INBOX, file mail as it arrives
+quietbox undo --since 1h    # move back what quietbox filed in the last hour
+```
+
+Only mail that arrives **after** `quietbox init` is ever touched: `init` records where each folder
+ends (UIDNEXT), and every run looks only at newer mail, so your existing inbox is never swept.
+`once` and `run` also read new mail in Sent, so people you have just written to stay in INBOX.
+
+Safety:
+
+- **Needs `MOVE` and `UIDPLUS`.** quietbox refuses to run on a server without both (`check` shows
+  the capabilities). It never uses COPY + delete + expunge, so nothing is ever expunged or deleted.
+- **Audit first.** Every move is recorded (message key, from, to, reason, time) *before* it runs
+  and completed afterwards. A run killed half-way is settled on the next start.
+- **Left alone:** mail you have already read (`\Seen`) or flagged (`skip_seen`, `skip_flagged`),
+  and any message quietbox has moved before. Drag a message back to INBOX, or `undo` it, and it
+  stays there.
+- **UIDVALIDITY.** If the server renumbers INBOX or Sent, nothing is moved: quietbox says so and
+  asks you to re-run `init`.
+- **One at a time.** A lock file next to the database stops two instances acting on one mailbox
+  (`--dry-run` does not need it). Unix only. `undo` also takes the lock, so stop `quietbox run`
+  before undoing (or use `undo --dry-run` while it runs).
+- `once` exits non-zero if a move failed or it had a warning, so cron mails you.
+- A failed move stays in INBOX and is not retried. `run` retries a lost connection with a growing
+  delay (5s up to 5 min) and stops on anything that needs you (no MOVE, nothing learned yet).
+- `undo` leaves alone anything you moved yourself since, and reports it. The audit log stores no
+  addresses or subjects, so `undo` shows folders and the reason a message was filed.
+- Sender routes only change when you re-run `init`; learning from your own moves is M4.
 
 ## Development
 

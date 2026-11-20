@@ -152,11 +152,33 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 		}
 	}
 
+	// Cursors: where `once`/`run` start looking for new mail. UIDNEXT is read
+	// before the folder's scan, so mail arriving during the scan is picked up
+	// by the first pass instead of being lost. Only a full, real run sets them.
+	cursors := map[string]store.Cursor{}
+	recordCursor := func(folder string) error {
+		if scoped || o.DryRun {
+			return nil
+		}
+		fs, err := b.FolderStatus(ctx, folder)
+		if err != nil {
+			return fmt.Errorf("status of %s: %w", folder, err)
+		}
+		cursors[folder] = store.Cursor{Folder: folder, UIDValidity: fs.UIDValidity, NextUID: fs.UIDNext}
+		return nil
+	}
+	inbox := learnParams(cfg).InboxFolder
+
 	var newObs []store.Obs
 	scanned := map[string]int{}
 	for _, cf := range cfg.Folders {
 		if !inScope(cf.Name) || !onServer[cf.Name] || cf.Name == sentName {
 			continue
+		}
+		if cf.Name == inbox {
+			if err := recordCursor(cf.Name); err != nil {
+				return nil, err
+			}
 		}
 		since := scanSince(cfg, cf, o)
 		progress("scanning %s ...", cf.Name)
@@ -195,6 +217,9 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 			return nil, err
 		}
 	} else {
+		if err := recordCursor(sentName); err != nil {
+			return nil, err
+		}
 		progress("scanning %s (sent mail) ...", sentName)
 		sent := map[string]*store.SentRow{}
 		seen := map[string]struct{}{}
@@ -291,6 +316,11 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 				return err
 			}
 			if err := tx.ReplaceSentMessageIDs(sentIDs); err != nil {
+				return err
+			}
+		}
+		for _, c := range cursors {
+			if err := tx.SetCursor(c); err != nil {
 				return err
 			}
 		}

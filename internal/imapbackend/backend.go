@@ -62,6 +62,9 @@ func dialFunc(mode string) (dialer, error) {
 // Backend is a logged-in IMAP session.
 type Backend struct {
 	c *imapclient.Client
+	// wake receives a signal whenever the server reports a change in the
+	// selected folder (an EXISTS update); WaitForChange listens on it.
+	wake chan struct{}
 }
 
 var _ mail.Backend = (*Backend)(nil)
@@ -76,7 +79,17 @@ func Dial(ctx context.Context, o Options) (*Backend, error) {
 	}
 	dial, _ := dialFunc(o.TLS)
 	addr := net.JoinHostPort(o.Host, strconv.Itoa(o.Port))
-	c, err := dial(addr, &imapclient.Options{})
+	b := &Backend{wake: make(chan struct{}, 1)}
+	c, err := dial(addr, &imapclient.Options{UnilateralDataHandler: &imapclient.UnilateralDataHandler{
+		Mailbox: func(d *imapclient.UnilateralDataMailbox) {
+			if d.NumMessages != nil {
+				select { // never block the client's reader
+				case b.wake <- struct{}{}:
+				default:
+				}
+			}
+		},
+	}})
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", addr, err)
 	}
@@ -84,7 +97,8 @@ func Dial(ctx context.Context, o Options) (*Backend, error) {
 		_ = c.Close()
 		return nil, fmt.Errorf("login as %s failed: %w", o.Username, err)
 	}
-	return &Backend{c: c}, nil
+	b.c = c
+	return b, nil
 }
 
 // Capabilities returns the post-login capability list, sorted.
@@ -170,18 +184,34 @@ var fetchBatch = 1000
 // (EXAMINE) and only BODY.PEEK[HEADER.FIELDS (...)] is requested, so no flag
 // (\Seen) ever changes and no body is downloaded.
 func (b *Backend) FetchHeaders(ctx context.Context, folder string, since time.Time, fn func([]mail.Header) error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if _, err := b.c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
-		return fmt.Errorf("open %q read-only: %w", folder, err)
-	}
-
 	crit := &imap.SearchCriteria{}
 	if !since.IsZero() {
 		// SINCE compares dates only, in the server's zone: widen by a day and
 		// filter exactly below.
 		crit.Since = since.AddDate(0, 0, -1)
+	}
+	return b.fetchMatching(ctx, folder, crit, since, 0, fn)
+}
+
+// FetchFrom streams the headers (with UID and flags) of the messages in folder
+// whose UID is at least fromUID. Like FetchHeaders it is read-only.
+func (b *Backend) FetchFrom(ctx context.Context, folder string, fromUID uint32, fn func([]mail.Header) error) error {
+	var set imap.UIDSet
+	set.AddRange(imap.UID(fromUID), 0) // fromUID:*
+	crit := &imap.SearchCriteria{UID: []imap.UIDSet{set}}
+	return b.fetchMatching(ctx, folder, crit, time.Time{}, fromUID, fn)
+}
+
+// fetchMatching opens folder read-only, finds the messages matching crit and
+// fetches their headers in batches. since and minUID filter exactly what the
+// server's search only approximates (SINCE is date-only; "n:*" always matches
+// the last message).
+func (b *Backend) fetchMatching(ctx context.Context, folder string, crit *imap.SearchCriteria, since time.Time, minUID uint32, fn func([]mail.Header) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := b.c.Select(folder, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+		return fmt.Errorf("open %q read-only: %w", folder, err)
 	}
 	found, err := b.c.UIDSearch(crit, nil).Wait()
 	if err != nil {
@@ -194,7 +224,7 @@ func (b *Backend) FetchHeaders(ctx context.Context, folder string, since time.Ti
 		HeaderFields: headerFields,
 		Peek:         true,
 	}
-	opts := &imap.FetchOptions{UID: true, InternalDate: true, BodySection: []*imap.FetchItemBodySection{section}}
+	opts := &imap.FetchOptions{UID: true, Flags: true, InternalDate: true, BodySection: []*imap.FetchItemBodySection{section}}
 
 	for start := 0; start < len(uids); start += fetchBatch {
 		if err := ctx.Err(); err != nil {
@@ -210,8 +240,13 @@ func (b *Backend) FetchHeaders(ctx context.Context, folder string, since time.Ti
 			if !since.IsZero() && buf.InternalDate.Before(since) {
 				continue
 			}
+			if uint32(buf.UID) < minUID {
+				continue
+			}
 			h := parseHeader(buf.FindBodySection(section), buf.InternalDate)
 			h.Folder = folder
+			h.UID = uint32(buf.UID)
+			h.Flags = flagStrings(buf.Flags)
 			batch = append(batch, h)
 		}
 		if len(batch) == 0 {
@@ -222,6 +257,18 @@ func (b *Backend) FetchHeaders(ctx context.Context, folder string, since time.Ti
 		}
 	}
 	return nil
+}
+
+// flagStrings converts IMAP flags to plain strings (nil stays nil).
+func flagStrings(flags []imap.Flag) []string {
+	if len(flags) == 0 {
+		return nil
+	}
+	out := make([]string, len(flags))
+	for i, f := range flags {
+		out[i] = string(f)
+	}
+	return out
 }
 
 // CreateFolder creates a mailbox and subscribes to it, so that mail clients

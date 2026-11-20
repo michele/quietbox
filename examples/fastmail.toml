@@ -9,6 +9,7 @@
 # Usage:
 #   quietbox check --config examples/fastmail.toml
 #   quietbox init --dry-run --config examples/fastmail.toml
+#   quietbox once --dry-run --config examples/fastmail.toml   # after init: what would be filed
 
 [imap]
 host = "imap.fastmail.com"
@@ -22,6 +23,11 @@ username = "you@example.com"   # <- your full Fastmail login address
 # Defaults are sensible; uncomment to tune.
 # [learn]
 # inbox_lookback = "6mo"
+
+# Mail you have already read or flagged stays where it is (both default to true).
+# [run]
+# skip_seen = true
+# skip_flagged = true
 
 # Folders. INBOX (important) and at least one "later" folder are required.
 # Missing folders are created by `quietbox init`, only after you confirm.

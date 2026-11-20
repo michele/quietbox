@@ -62,4 +62,16 @@ CREATE TABLE sent_message_ids (
 	sent_at    INTEGER NOT NULL
 );
 `,
+	// 3: audit outcome and destination (for undo and crash reconciliation), and
+	// per-folder UID cursors so run/once only look at new mail.
+	`
+ALTER TABLE audit ADD COLUMN status TEXT NOT NULL DEFAULT 'done';
+ALTER TABLE audit ADD COLUMN dest_uidvalidity INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE audit ADD COLUMN dest_uid INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE cursors (
+	folder      TEXT PRIMARY KEY,
+	uidvalidity INTEGER NOT NULL,
+	next_uid    INTEGER NOT NULL
+);
+`,
 }

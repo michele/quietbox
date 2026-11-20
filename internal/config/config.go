@@ -81,6 +81,15 @@ type Learn struct {
 	HalfLifeDur      time.Duration `toml:"-"`
 }
 
+// Run tunes `quietbox once` and `quietbox run`. Mail you have already read or
+// flagged is left where it is unless you turn these off.
+type Run struct {
+	SkipSeen    bool `toml:"skip_seen"`
+	SkipFlagged bool `toml:"skip_flagged"`
+}
+
+func defaultRun() Run { return Run{SkipSeen: true, SkipFlagged: true} }
+
 // State locates the SQLite database.
 type State struct {
 	Path string `toml:"path"`
@@ -91,6 +100,7 @@ type Config struct {
 	IMAP    IMAP     `toml:"imap"`
 	Me      Me       `toml:"me"`
 	Learn   Learn    `toml:"learn"`
+	Run     Run      `toml:"run"`
 	State   State    `toml:"state"`
 	Folders []Folder `toml:"folder"`
 }
@@ -132,7 +142,7 @@ func Parse(data []byte, getenv func(string) string) (*Config, error) {
 }
 
 func parse(data []byte, getenv func(string) string, requirePassword bool) (*Config, error) {
-	cfg := Config{Learn: defaultLearn()}
+	cfg := Config{Learn: defaultLearn(), Run: defaultRun()}
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
