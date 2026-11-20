@@ -71,12 +71,12 @@ func Process(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.
 		return nil, err
 	}
 	if err := mail.RequireMove(caps); err != nil {
-		return nil, err
+		return nil, refuse(err)
 	}
 	if known, err := st.Folders(ctx); err != nil {
 		return nil, err
 	} else if len(known) == 0 {
-		return nil, errInitFirst
+		return nil, refuse(errInitFirst)
 	}
 	rep := &ProcessReport{}
 	if !o.DryRun {
@@ -98,6 +98,21 @@ func Process(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.
 }
 
 var errInitFirst = errors.New("the database holds nothing learned yet: run `quietbox init` first")
+
+// refusal marks an error as "quietbox will not run in this state" (server cannot
+// MOVE, nothing learned yet, bad config), as opposed to a transient failure such
+// as a dropped connection. The run loop retries the latter and stops on the former.
+type refusal struct{ err error }
+
+func (r refusal) Error() string { return r.err.Error() }
+func (r refusal) Unwrap() error { return r.err }
+
+func refuse(err error) error { return refusal{err} }
+
+func isRefusal(err error) bool {
+	var r refusal
+	return errors.As(err, &r)
+}
 
 func progress(o ProcessOptions, format string, a ...any) {
 	if o.Progress != nil {
@@ -148,7 +163,7 @@ func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o Process
 		return cur, false, err
 	}
 	if !found {
-		return cur, false, fmt.Errorf("no cursor for %s: run `quietbox init` first", folder)
+		return cur, false, refuse(fmt.Errorf("no cursor for %s: run `quietbox init` first", folder))
 	}
 	fs, err := b.FolderStatus(ctx, folder)
 	if err != nil {
@@ -178,7 +193,7 @@ func processSent(ctx context.Context, cfg *config.Config, b mail.Backend, st *st
 	}
 	sentName, err := sentFolder(cfg, server)
 	if err != nil {
-		return err
+		return refuse(err)
 	}
 	cur, ok, err := checkCursor(ctx, b, st, o, sentName, rep)
 	if err != nil || !ok {

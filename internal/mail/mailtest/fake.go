@@ -273,6 +273,27 @@ func (f *Fake) WaitForChange(ctx context.Context, _ string) error {
 	}
 }
 
+// CountFrom counts the messages from one sender in a folder (safe to call
+// while another goroutine uses the Fake).
+func (f *Fake) CountFrom(folder, from string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, h := range f.Messages[folder] {
+		if h.From == from {
+			n++
+		}
+	}
+	return n
+}
+
+// MoveCount is the number of successful moves so far (safe for concurrent use).
+func (f *Fake) MoveCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.Moves)
+}
+
 // Append delivers a message to a folder, as new mail would arrive, and returns its UID.
 func (f *Fake) Append(folder string, h mail.Header) uint32 {
 	f.mu.Lock()

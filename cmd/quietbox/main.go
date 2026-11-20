@@ -36,7 +36,7 @@ func newRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&opts.configPath, "config", defaultConfigPath(), "path to the TOML config file")
 	root.PersistentFlags().BoolVarP(&opts.verbose, "verbose", "v", false, "print progress to stderr (never credentials)")
-	root.AddCommand(newCheckCmd(opts), newInitCmd(opts), newSendersCmd(opts), newScanCmd(opts), newEvalCmd(opts), newOnceCmd(opts), newUndoCmd(opts))
+	root.AddCommand(newCheckCmd(opts), newInitCmd(opts), newSendersCmd(opts), newScanCmd(opts), newEvalCmd(opts), newOnceCmd(opts), newRunCmd(opts), newUndoCmd(opts))
 	return root
 }
 
