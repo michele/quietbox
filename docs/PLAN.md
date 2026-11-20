@@ -131,7 +131,8 @@ last snapshot. A message that changed folder **and that quietbox didn't move its
 - `domains(domain, default_folder, senders, agreeing)`
 - `messages(key, folder, first_seen, last_seen)`: snapshot used to detect user moves
 - `decisions(message_key, folder, reason, at)`
-- `audit(id, action, message_key, from_folder, to_folder, reason, at, undone)`: `action` is `create_folder` in M1, moves from M3
+- `audit(id, action, message_key, from_folder, to_folder, reason, at, undone, status, dest_uidvalidity, dest_uid)`: `action` is `create_folder`, `move` or `undo_move`; `status` is `planned|done|failed`
+- `cursors(folder, uidvalidity, next_uid)`: where `once`/`run` resume (INBOX and Sent; schema v3)
 
 Message key: OBJECTID `EMAILID` → `Message-ID` header → hash(From, Date, Subject).
 
@@ -234,10 +235,44 @@ what the history says), so `scan` on a mailbox that `init` has just read will mo
 "sender route to INBOX". Detectors matter for senders that appear after `init`. Whether an
 INBOX-only history should count as a learned route is something to decide from `eval` numbers.
 
-### M3: Run for real
-- `quietbox run` (daemon, IDLE on INBOX) and `quietbox once` (cron)
-- `--dry-run`, audit log, `quietbox undo --since 1h`
-- **Done when:** SaneBox is switched off and quietbox has run for a week.
+### M3: Run for real: implemented
+- `quietbox once` (cron), `quietbox run` (daemon, IDLE on INBOX), `--dry-run`, `quietbox undo --since 1h`.
+  Design: `docs/superpowers/specs/2026-11-20-m3-run-design.md`; plan: `docs/superpowers/plans/2026-11-20-m3-run.md`.
+- **New mail only.** `init` records a cursor per folder for INBOX and Sent: `(UIDVALIDITY, next UID)`, taking
+  UIDNEXT *before* the scan so mail arriving during `init` is not lost. `once`/`run` fetch only `UID >= cursor`.
+  If UIDVALIDITY changed, nothing moves from that folder: the cursor is reset and the user is told to re-run `init`.
+  Typed folders get no cursors until M4. Both commands refuse to run before `init`.
+- **One pass (`engine.Process`)**, shared by `once` and `run`: lock file (`<state path>.lock`, flock, Unix only;
+  `--dry-run` takes none) -> require `MOVE` + `UIDPLUS` -> settle `planned` audit rows left by a crash (found in
+  the destination by Message-ID -> `done`, else `failed`) -> check UIDVALIDITY -> Sent (new recipients and
+  Message-IDs are added, never replaced; a dry run applies them in memory only, so it decides like the real run)
+  -> INBOX.
+- **INBOX step.** Skipped: `\Seen` and `\Flagged` mail (`[run] skip_seen`, `skip_flagged`, default true) and any
+  message whose key already has a `move` audit row from an earlier pass, whatever its status and even if
+  undone (so a message dragged back to INBOX, or restored by `undo`, is never moved again). Everything else goes
+  through `classify.Classify`; messages that leave INBOX are moved one by one: audit row `planned` -> `UID MOVE`
+  -> row `done` with the destination UIDVALIDITY/UID from COPYUID (or `failed`; a failure is not retried and the
+  pass continues). The cursor advances after the batch. A dry run prints the plan and writes and advances nothing.
+  Two copies of one message delivered in the same pass are both filed (the guard knows earlier passes only).
+- **Server requirements.** `MOVE` (RFC 6851) and `UIDPLUS` are required; quietbox never COPY+delete+expunges.
+  go-imap's `Client.Move` falls back to exactly that when MOVE is missing, so the backend checks first
+  (`moveGuard`) and the engine refuses before fetching anything. Not verified: which of Gmail/Outlook advertise
+  both (run `quietbox check`); Outlook may also need OAuth2, which is unsupported.
+- **`run`.** `Process`, then IDLE (re-issued every 20 min), repeated; a connection error closes the connection and
+  reconnects with backoff (5s doubling to 5 min, reset by a clean pass). Refusals (no MOVE, no `init`, lock held,
+  no Sent folder) are fatal. SIGINT/SIGTERM stop it after the current pass. It holds the lock for its lifetime, so
+  `once` while `run` is up fails with "another quietbox".
+- **`undo --since <duration> [--dry-run]`.** Takes `done`, not-undone moves in the window, newest first, finds each
+  message by (UIDVALIDITY, UID) from COPYUID, or by Message-ID if UIDVALIDITY changed (hash keys cannot be searched:
+  reported as unfindable), writes an `undo_move` row first, moves it back and marks the original undone. A message
+  you moved yourself is skipped and reported. Takes the lock.
+- **State.** Schema v3: `audit.status` (`planned|done|failed`), `audit.dest_uidvalidity`, `audit.dest_uid`, and
+  `cursors(folder, uidvalidity, next_uid)`. The audit log holds keys, folders and reasons, never addresses or subjects.
+- Message keys are still Message-ID then hash: go-imap v2 (beta.9) cannot fetch EMAILID.
+- Blackhole: mail from a sender routed to the blackhole folder is moved *into that folder* like any other route;
+  the "future mail goes to Trash" behaviour is M5.
+- Verified against the Dovecot test server only (`make itest`: once, dry-run, undo, drag-back, run waking on
+  delivery, lock). **Done when:** SaneBox is switched off and quietbox has run for a week. That part is not verified.
 
 ### M4: Training via folder moves
 - snapshot diff, user-move detection, `quietbox explain`, `quietbox senders set <addr> <folder>`
