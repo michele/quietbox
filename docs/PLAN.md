@@ -261,7 +261,9 @@ INBOX-only history should count as a learned route is something to decide from `
 - **`run`.** `Process`, then IDLE (re-issued every 20 min), repeated; a connection error closes the connection and
   reconnects with backoff (5s doubling to 5 min, reset by a clean pass). Refusals (no MOVE, no `init`, lock held,
   no Sent folder) are fatal. SIGINT/SIGTERM stop it after the current pass. It holds the lock for its lifetime, so
-  `once` while `run` is up fails with "another quietbox".
+  `once` and `undo` while `run` is up fail with "another quietbox". Before every wait it compares the folder's
+  UIDNEXT with the cursor and goes round again if mail arrived since the pass looked (the server would not announce
+  it twice); the cursor therefore never ends a pass below the UIDNEXT read at its start.
 - **`undo --since <duration> [--dry-run]`.** Takes `done`, not-undone moves in the window, newest first, finds each
   message by (UIDVALIDITY, UID) from COPYUID, or by Message-ID if UIDVALIDITY changed (hash keys cannot be searched:
   reported as unfindable), writes an `undo_move` row first, moves it back and marks the original undone. A message

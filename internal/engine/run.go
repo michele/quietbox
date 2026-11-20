@@ -91,9 +91,29 @@ func runConnected(ctx context.Context, cfg *config.Config, st *store.Store, o Ru
 		for _, w := range rep.Warnings {
 			say("warning: %s", w)
 		}
+		// Mail may have arrived after this pass looked but before the wait
+		// starts; the server will not announce it again, so check first.
+		if more, err := mailWaiting(ctx, b, st, inbox); err != nil {
+			return err
+		} else if more {
+			continue
+		}
 		if err := b.WaitForChange(ctx, inbox); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// mailWaiting reports whether the folder already holds mail beyond the cursor.
+func mailWaiting(ctx context.Context, b mail.Backend, st *store.Store, folder string) (bool, error) {
+	cur, ok, err := st.Cursor(ctx, folder)
+	if err != nil || !ok {
+		return false, err
+	}
+	fs, err := b.FolderStatus(ctx, folder)
+	if err != nil {
+		return false, err
+	}
+	return fs.UIDValidity == cur.UIDValidity && fs.UIDNext > cur.NextUID, nil
 }

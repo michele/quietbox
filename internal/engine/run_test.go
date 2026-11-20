@@ -191,3 +191,65 @@ func TestDefaultBackoffGrowsAndCaps(t *testing.T) {
 		t.Errorf("cap = %v", DefaultBackoff(50))
 	}
 }
+
+// lateMail delivers a message right after the first INBOX fetch: after the pass
+// has looked, before the loop starts waiting. Nothing ever wakes the wait.
+type lateMail struct {
+	*mailtest.Fake
+	once sync.Once
+}
+
+func (l *lateMail) FetchFrom(ctx context.Context, folder string, from uint32, fn func([]mail.Header) error) error {
+	err := l.Fake.FetchFrom(ctx, folder, from, fn)
+	if folder == "INBOX" {
+		l.once.Do(func() { l.Fake.Append("INBOX", newMail("late@substack.test", 0, "<late2>", nil)) })
+	}
+	return err
+}
+
+// Review finding: mail that arrives between the end of a pass and the start of
+// the IDLE wait must not sit there until the next unrelated delivery.
+func TestRunDoesNotMissMailArrivingBeforeTheWait(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	fake.Wake = make(chan struct{}) // never fires
+	late := &lateMail{Fake: fake}
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect: func(context.Context) (mail.Backend, error) { return late, nil },
+		Backoff: fastBackoff,
+	})
+	waitFor(t, "the mail that arrived just after the first pass", func() bool {
+		return fake.CountFrom("SaneNews", "late@substack.test") == 1
+	})
+	_ = stop()
+}
+
+// An expunged top message must not make the loop spin: UIDNEXT stays above the
+// highest UID that still exists.
+func TestRunDoesNotSpinWhenTheNewestMessageWasDeleted(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	fake.Wake = make(chan struct{})
+	uid := fake.Append("INBOX", newMail("gone@x.test", 0, "<gone>", nil))
+	fake.Remove("INBOX", uid) // deleted by you before quietbox looked
+	var fetches atomic.Int32
+	counted := &countingFetch{Fake: fake, n: &fetches}
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect: func(context.Context) (mail.Backend, error) { return counted, nil },
+		Backoff: fastBackoff,
+	})
+	waitFor(t, "the first pass", func() bool { return fake.MoveCount() == 7 })
+	time.Sleep(100 * time.Millisecond)
+	_ = stop()
+	if n := fetches.Load(); n > 4 { // a pass fetches INBOX and Sent; a spin would be hundreds
+		t.Errorf("%d fetches: the loop is spinning", n)
+	}
+}
+
+type countingFetch struct {
+	*mailtest.Fake
+	n *atomic.Int32
+}
+
+func (c *countingFetch) FetchFrom(ctx context.Context, folder string, from uint32, fn func([]mail.Header) error) error {
+	c.n.Add(1)
+	return c.Fake.FetchFrom(ctx, folder, from, fn)
+}

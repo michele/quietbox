@@ -157,29 +157,29 @@ func reconcile(ctx context.Context, b mail.Backend, st *store.Store, rep *Proces
 // UIDVALIDITY changed, the stored UIDs mean nothing: it resets the cursor to the
 // folder's current end (unless dry-run), warns, and reports ok=false so the
 // caller skips the folder.
-func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, folder string, rep *ProcessReport) (cur store.Cursor, ok bool, err error) {
+func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, folder string, rep *ProcessReport) (cur store.Cursor, fs mail.FolderStatus, ok bool, err error) {
 	cur, found, err := st.Cursor(ctx, folder)
 	if err != nil {
-		return cur, false, err
+		return cur, fs, false, err
 	}
 	if !found {
-		return cur, false, refuse(fmt.Errorf("no cursor for %s: run `quietbox init` first", folder))
+		return cur, fs, false, refuse(fmt.Errorf("no cursor for %s: run `quietbox init` first", folder))
 	}
-	fs, err := b.FolderStatus(ctx, folder)
+	fs, err = b.FolderStatus(ctx, folder)
 	if err != nil {
-		return cur, false, fmt.Errorf("status of %s: %w", folder, err)
+		return cur, fs, false, fmt.Errorf("status of %s: %w", folder, err)
 	}
 	if fs.UIDValidity == cur.UIDValidity {
-		return cur, true, nil
+		return cur, fs, true, nil
 	}
 	rep.Warnings = append(rep.Warnings, fmt.Sprintf(
 		"%s was renumbered by the server (UIDVALIDITY changed): nothing was moved from it; run `quietbox init` to relearn", folder))
 	if !o.DryRun {
 		if err := st.SetCursor(ctx, store.Cursor{Folder: folder, UIDValidity: fs.UIDValidity, NextUID: fs.UIDNext}); err != nil {
-			return cur, false, err
+			return cur, fs, false, err
 		}
 	}
-	return cur, false, nil
+	return cur, fs, false, nil
 }
 
 // processSent learns from mail you sent since the last pass: new recipients
@@ -195,7 +195,7 @@ func processSent(ctx context.Context, cfg *config.Config, b mail.Backend, st *st
 	if err != nil {
 		return refuse(err)
 	}
-	cur, ok, err := checkCursor(ctx, b, st, o, sentName, rep)
+	cur, _, ok, err := checkCursor(ctx, b, st, o, sentName, rep)
 	if err != nil || !ok {
 		return err
 	}
@@ -239,7 +239,7 @@ func processSent(ctx context.Context, cfg *config.Config, b mail.Backend, st *st
 // already moved are in the audit log and are skipped.
 func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *config.Config, o ProcessOptions, k classify.Knowledge, targets classify.Targets, rep *ProcessReport) error {
 	inbox := k.Inbox
-	cur, ok, err := checkCursor(ctx, b, st, o, inbox, rep)
+	cur, status, ok, err := checkCursor(ctx, b, st, o, inbox, rep)
 	if err != nil || !ok {
 		return err
 	}
@@ -298,7 +298,10 @@ func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *con
 	if o.DryRun {
 		return nil
 	}
-	if next := maxUID + 1; next > cur.NextUID {
+	// UIDNEXT as read before the fetch also counts: everything below it was
+	// fetched, so a deleted newest message cannot leave the cursor behind the
+	// folder's end (which would look like unprocessed mail forever).
+	if next := max(maxUID+1, status.UIDNext); next > cur.NextUID {
 		cur.NextUID = next
 		if err := st.SetCursor(ctx, cur); err != nil {
 			return err

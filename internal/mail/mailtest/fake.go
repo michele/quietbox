@@ -294,6 +294,19 @@ func (f *Fake) MoveCount() int {
 	return len(f.Moves)
 }
 
+// Remove deletes a message by UID, as a user deleting it would. Its UID is never reused.
+func (f *Fake) Remove(folder string, uid uint32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	msgs := f.Messages[folder]
+	for i, h := range msgs {
+		if h.UID == uid {
+			f.Messages[folder] = append(msgs[:i:i], msgs[i+1:]...)
+			return
+		}
+	}
+}
+
 // Append delivers a message to a folder, as new mail would arrive, and returns its UID.
 func (f *Fake) Append(folder string, h mail.Header) uint32 {
 	f.mu.Lock()

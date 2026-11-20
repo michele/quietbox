@@ -20,7 +20,7 @@ func AcquireLock(path string) (release func(), err error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another quietbox is already running on this mailbox (lock file %s)", path)
+			return nil, fmt.Errorf("another quietbox is already running on this mailbox (lock file %s): wait for it or stop it first", path)
 		}
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}

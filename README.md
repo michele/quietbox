@@ -181,7 +181,8 @@ Safety:
 - **UIDVALIDITY.** If the server renumbers INBOX or Sent, nothing is moved: quietbox says so and
   asks you to re-run `init`.
 - **One at a time.** A lock file next to the database stops two instances acting on one mailbox
-  (`--dry-run` does not need it). Unix only.
+  (`--dry-run` does not need it). Unix only. `undo` also takes the lock, so stop `quietbox run`
+  before undoing (or use `undo --dry-run` while it runs).
 - `once` exits non-zero if a move failed or it had a warning, so cron mails you.
 - A failed move stays in INBOX and is not retried. `run` retries a lost connection with a growing
   delay (5s up to 5 min) and stops on anything that needs you (no MOVE, nothing learned yet).
