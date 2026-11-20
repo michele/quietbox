@@ -140,6 +140,15 @@ combinations behind new-sender decisions. Those tables are aggregate (no address
 header text), so they are safe to paste when asking for help tuning. `eval` reads the mailbox and
 writes nothing (no database either).
 
+To measure a change before adopting it, `eval` can switch on experiments; the report names them and
+you compare runs with the same `--cutoff`:
+
+| Flag | What it tries |
+|---|---|
+| `--thread-first` | a reply in a thread you started stays in INBOX even if the sender is filed elsewhere |
+| `--no-mixed-override` | a mixed sender always follows its majority route |
+| `--only-strong` | detectors file mail from unknown senders only on a strong match |
+
 ## Development
 
 ```sh

@@ -179,16 +179,17 @@ log starts storing keys.
   plus person-to-person negatives), not real samples, so the real-mail check is `quietbox eval`.
   - Each detector returns a strength (`weak` = some evidence, `strong` = several independent
     signals) and the signals that fired. Only `strong` can override a mixed sender's route.
-  - `newsletter`: `List-Id` (+ `List-Unsubscribe` = strong), or a newsletter-platform domain in
-    From or Return-Path (substack, beehiiv, buttondown, mailchimp, convertkit, ghost, mailerlite)
-    unless the sender is a `noreply@`-style system address. An unsubscribe header alone is not
-    a newsletter.
-  - `bulk`: `noreply`/`notifications`/`billing`/`orders`... local part or a transactional ESP
-    header (SES, Postmark, SendGrid, Mailgun); strong when a subject keyword (receipt, order,
-    invoice, shipped, ricevuta, ordine, fattura, spedizione...) agrees. A keyword alone never
-    fires, and mail with a `List-Id` is never bulk.
-  - `later`: `Precedence: bulk|list|junk`, `Auto-Submitted`, `List-Unsubscribe`, `Feedback-ID`,
-    marketing ESP headers, mass-mailer `X-Mailer`; two or more signals = strong.
+  - `newsletter`: `List-Id` (+ `List-Unsubscribe` = strong); a newsletter-platform domain in From
+    or Return-Path (substack, beehiiv, buttondown, mailchimp, convertkit, ghost, mailerlite); or
+    `List-Unsubscribe` without a `List-Id` (weak, strong with `Precedence: bulk|list|junk`). System
+    senders (`noreply@`-style) never count as newsletters.
+  - `bulk`: needs a `noreply`/`notifications`/`billing`/`orders`... sender; a transactional ESP
+    header (SES, Postmark, SendGrid, Mailgun) or a subject keyword (receipt, order, invoice,
+    shipped, ricevuta, ordine, fattura, spedizione...) makes it strong. ESP headers and keywords
+    never fire on their own (ESPs carry plenty of marketing), and mail with a `List-Id` is never bulk.
+  - `later`: `Precedence: bulk|list|junk`, `Auto-Submitted`, `List-Unsubscribe`, marketing ESP
+    headers (`X-Campaign-Id`...), mass-mailer `X-Mailer`; two or more signals = strong. `Feedback-ID`
+    only counts next to another signal.
   - A detector whose type has no detection target (see `detect = true`) cannot fire and the
     next one is tried. Own addresses and mail without a From are never moved.
 - `quietbox scan`: what quietbox would do with INBOX mail and why; `--csv`, `--limit`, `--all`.
@@ -204,6 +205,16 @@ log starts storing keys.
   senders), and prints agreement per rule x strength and the commonest new-sender signal
   combinations (fixed vocabularies only, so nothing personal). `--csv` lists the disagreements.
   In memory only: no database, nothing written to the mailbox.
+- The first revision of these rules came from a real-mailbox `eval` (139 new-sender messages):
+  `List-Unsubscribe` alone went to SaneNews 10 of 10, ESP-only mail was almost never Bulk, a
+  `noreply`-style sender was Bulk 13 of 18, and `Feedback-ID` alone was noise. The test fixtures
+  remain fabricated; the real check is always `eval` on a mailbox.
+- `eval` experiments (not defaults, the report names them): `--thread-first` (a reply in a thread
+  you started stays in INBOX even if the sender is filed elsewhere), `--no-mixed-override` (a
+  mixed sender always follows its majority route) and `--only-strong` (detectors file unknown
+  senders only on a strong match). `classify.Policy` carries them. For the hidden-important mail
+  from known senders it also reports how many were replies, how many replied to mail you sent,
+  route-share and history-size buckets, and how many were mixed senders.
 - Message headers now also carry `In-Reply-To`, `References` and a whitelist of automation
   headers (`Signals`). IMAP `HEADER.FIELDS` has no wildcards, so ESP markers are listed by name.
 - **Done when:** new-sender agreement on your real mailbox is good enough for you to trust it.
