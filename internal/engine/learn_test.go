@@ -459,3 +459,65 @@ func TestLearnDryRunStoresNoSentMessageIDs(t *testing.T) {
 		t.Errorf("dry run stored %v", ids)
 	}
 }
+
+func TestLearnRecordsCursorsBeforeScan(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := miniMailbox()
+	before, err := fake.FolderStatus(context.Background(), "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentBefore, _ := fake.FolderStatus(context.Background(), "Sent")
+	var late uint32
+	fake.OnFetch = func(folder string) { // mail arriving while the scan runs
+		if folder == "INBOX" && late == 0 {
+			late = fake.Append("INBOX", hdr("late@x.test", 0, "<late>"))
+		}
+	}
+	st := openStore(t)
+	if _, err := Learn(context.Background(), cfg, fake, st, LearnOptions{Now: learnNow, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	c, ok, err := st.Cursor(context.Background(), "INBOX")
+	if err != nil || !ok || c.UIDValidity != before.UIDValidity || c.NextUID != before.UIDNext {
+		t.Fatalf("INBOX cursor = %+v ok=%v err=%v, want next %d", c, ok, err, before.UIDNext)
+	}
+	if late < c.NextUID {
+		t.Errorf("late message uid %d is below the cursor %d: it would be missed", late, c.NextUID)
+	}
+	sc, ok, _ := st.Cursor(context.Background(), "Sent")
+	if !ok || sc.NextUID != sentBefore.UIDNext {
+		t.Errorf("Sent cursor = %+v ok=%v, want next %d", sc, ok, sentBefore.UIDNext)
+	}
+	if _, ok, _ := st.Cursor(context.Background(), "SaneNews"); ok {
+		t.Error("only INBOX and Sent get cursors in M3")
+	}
+}
+
+func TestLearnDryRunWritesNoCursor(t *testing.T) {
+	cfg := learnConfig(t, "")
+	st := openStore(t)
+	if _, err := Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := st.Cursor(context.Background(), "INBOX"); ok {
+		t.Error("dry run stored a cursor")
+	}
+}
+
+func TestLearnScopedKeepsCursors(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := miniMailbox()
+	st := openStore(t)
+	if _, err := Learn(context.Background(), cfg, fake, st, LearnOptions{Now: learnNow, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := st.Cursor(context.Background(), "INBOX")
+	fake.Append("INBOX", hdr("later@x.test", 0, "<later>"))
+	if _, err := Learn(context.Background(), cfg, fake, st, LearnOptions{Now: learnNow, Folder: "INBOX"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := st.Cursor(context.Background(), "INBOX"); got != first {
+		t.Errorf("re-learning one folder moved the cursor: %+v -> %+v", first, got)
+	}
+}

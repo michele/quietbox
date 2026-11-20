@@ -237,3 +237,30 @@ func TestLoadOfflineDoesNotNeedPassword(t *testing.T) {
 		t.Error("LoadOffline must still validate folders")
 	}
 }
+
+func TestRunDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(validBase), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Run.SkipSeen || !cfg.Run.SkipFlagged {
+		t.Errorf("run defaults = %+v, want both true", cfg.Run)
+	}
+}
+
+func TestRunOverrides(t *testing.T) {
+	cfg, err := Parse([]byte("[run]\nskip_seen = false\n"+validBase), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Run.SkipSeen || !cfg.Run.SkipFlagged {
+		t.Errorf("run = %+v, want skip_seen=false skip_flagged=true", cfg.Run)
+	}
+}
+
+func TestRunUnknownKeyRejected(t *testing.T) {
+	_, err := Parse([]byte("[run]\nskip_everything = true\n"+validBase), pw)
+	if err == nil || !strings.Contains(err.Error(), "run.skip_everything") {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -45,6 +45,9 @@ type Fake struct {
 	// OnCreate runs just before a folder is created, so tests can check what
 	// happened first (e.g. that the audit row already exists).
 	OnCreate func(name string)
+	// OnFetch runs at the start of FetchHeaders and FetchFrom, before any
+	// message is read, so tests can deliver mail "during" a scan.
+	OnFetch func(folder string)
 	// OnMove runs just before a message is moved, with the same purpose.
 	OnMove func(from, to string, uid uint32)
 
@@ -94,6 +97,9 @@ func (f *Fake) validity(folder string) uint32 {
 }
 
 func (f *Fake) FetchHeaders(_ context.Context, folder string, since time.Time, fn func([]mail.Header) error) error {
+	if f.OnFetch != nil {
+		f.OnFetch(folder)
+	}
 	f.mu.Lock()
 	if f.FetchErr != nil {
 		f.mu.Unlock()
@@ -143,6 +149,9 @@ func (f *Fake) FolderStatus(_ context.Context, folder string) (mail.FolderStatus
 }
 
 func (f *Fake) FetchFrom(_ context.Context, folder string, fromUID uint32, fn func([]mail.Header) error) error {
+	if f.OnFetch != nil {
+		f.OnFetch(folder)
+	}
 	f.mu.Lock()
 	if f.FetchErr != nil {
 		f.mu.Unlock()

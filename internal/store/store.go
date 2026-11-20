@@ -591,6 +591,14 @@ func (s *Store) MovedKeys(ctx context.Context) (map[string]struct{}, error) {
 	return out, rows.Err()
 }
 
+// SetCursor stores or replaces a folder's cursor inside the transaction.
+func (t *Tx) SetCursor(c Cursor) error {
+	_, err := t.tx.Exec(setCursorSQL, c.Folder, c.UIDValidity, c.NextUID)
+	return err
+}
+
+const setCursorSQL = "INSERT INTO cursors(folder, uidvalidity, next_uid) VALUES (?,?,?) ON CONFLICT(folder) DO UPDATE SET uidvalidity=excluded.uidvalidity, next_uid=excluded.next_uid"
+
 // Cursor returns the stored cursor for a folder; ok is false when there is none.
 func (s *Store) Cursor(ctx context.Context, folder string) (Cursor, bool, error) {
 	c := Cursor{Folder: folder}
@@ -604,9 +612,7 @@ func (s *Store) Cursor(ctx context.Context, folder string) (Cursor, bool, error)
 
 // SetCursor stores or replaces a folder's cursor.
 func (s *Store) SetCursor(ctx context.Context, c Cursor) error {
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO cursors(folder, uidvalidity, next_uid) VALUES (?,?,?) ON CONFLICT(folder) DO UPDATE SET uidvalidity=excluded.uidvalidity, next_uid=excluded.next_uid",
-		c.Folder, c.UIDValidity, c.NextUID)
+	_, err := s.db.ExecContext(ctx, setCursorSQL, c.Folder, c.UIDValidity, c.NextUID)
 	return err
 }
 
