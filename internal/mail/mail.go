@@ -105,5 +105,21 @@ type Backend interface {
 	FetchHeaders(ctx context.Context, folder string, since time.Time, fn func([]Header) error) error
 	// CreateFolder creates a mailbox. Callers must write the audit row first.
 	CreateFolder(ctx context.Context, name string) error
+	// FolderStatus returns UIDVALIDITY and UIDNEXT without changing anything.
+	FolderStatus(ctx context.Context, folder string) (FolderStatus, error)
+	// FetchFrom streams the headers (with UID and flags) of messages whose UID
+	// is at least fromUID, in UID order. Read-only: no flag is changed.
+	FetchFrom(ctx context.Context, folder string, fromUID uint32, fn func([]Header) error) error
+	// Move moves one message and returns where it landed. It must refuse (and
+	// never expunge) unless the server supports MOVE and UIDPLUS (RequireMove).
+	// Callers must write the audit row first. A result UID of 0 means the
+	// server did not say where the message landed; use Locate.
+	Move(ctx context.Context, from string, uid uint32, to string) (MoveResult, error)
+	// Locate returns the current UID of a message in folder: by uid when
+	// uidValidity still matches, else by messageID (skipped when empty).
+	Locate(ctx context.Context, folder string, uidValidity, uid uint32, messageID string) (uint32, bool, error)
+	// WaitForChange blocks until folder may have new mail, a refresh interval
+	// passes (nil), the connection fails, or ctx is done (ctx.Err()).
+	WaitForChange(ctx context.Context, folder string) error
 	Close() error
 }
