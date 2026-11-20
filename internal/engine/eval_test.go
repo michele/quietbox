@@ -384,3 +384,123 @@ func TestEvalReportShowsTheBreakdown(t *testing.T) {
 		t.Errorf("report contains an address:\n%s", out)
 	}
 }
+
+// policyMailbox is built so that each experiment flips exactly one message.
+func policyMailbox() *mailtest.Fake {
+	replyToMe := func(h *mail.Header) { h.InReplyTo = "<sent-h>" }
+	return &mailtest.Fake{
+		Caps: mail.Capabilities{"IMAP4REV1"},
+		Folders: []mail.Folder{
+			{Name: "INBOX"}, {Name: "SaneLater"}, {Name: "SaneNews"}, {Name: "SaneBulk"}, {Name: "SaneBlackHole"},
+			{Name: "Sent", Attrs: []string{`\Sent`}},
+		},
+		Messages: map[string][]mail.Header{
+			"INBOX": {
+				// orders@mix.test: mixed sender, SaneLater ~60% / INBOX ~40%
+				newMail("orders@mix.test", 99, "<m1>", nil), newMail("orders@mix.test", 94, "<m2>", nil),
+				// reply to mail you sent, from a sender filed in SaneBulk: the sender route hides it
+				newMail("h@help.test", 20, "<t1>", replyToMe),
+			},
+			"SaneLater": {
+				newMail("orders@mix.test", 100, "<l1>", nil), newMail("orders@mix.test", 95, "<l2>", nil), newMail("orders@mix.test", 90, "<l3>", nil),
+			},
+			"SaneBulk": {
+				newMail("h@help.test", 100, "<b1>", nil), newMail("h@help.test", 95, "<b2>", nil), newMail("h@help.test", 90, "<b3>", nil),
+				// mixed sender, strong bulk match: the default override files it in SaneBulk
+				newMail("orders@mix.test", 21, "<t2>", func(h *mail.Header) { h.Subject = "Your order has shipped" }),
+				// new sender, weak bulk match (noreply-style sender only)
+				newMail("alerts@forge.test", 22, "<t3>", nil),
+			},
+			"Sent": {hdr("me@example.test", 70, "<sent-h>", "x@y.test")},
+		},
+	}
+}
+
+func evalWith(t *testing.T, p classify.Policy) *EvalReport {
+	t.Helper()
+	rep, err := Eval(context.Background(), learnConfig(t, ""), policyMailbox(), EvalOptions{Cutoff: evalCutoff, Policy: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rep
+}
+
+func TestEvalPolicyExperiments(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy classify.Policy
+		agree  int
+		harm   HarmCounts
+		note   string
+	}{
+		{"default", classify.Policy{}, 2, HarmCounts{Hidden: 1}, "the reply is hidden by the sender route"},
+		{"thread-first", classify.Policy{ThreadFirst: true}, 3, HarmCounts{}, "the reply stays in INBOX"},
+		{"no mixed override", classify.Policy{NoMixedOverride: true}, 1, HarmCounts{Hidden: 1, CrossFiled: 1}, "the order mail follows the majority route"},
+		{"only strong", classify.Policy{OnlyStrong: true}, 1, HarmCounts{Hidden: 1, Leaked: 1}, "the weak noreply match stays in INBOX"},
+		{"all three", classify.Policy{ThreadFirst: true, NoMixedOverride: true, OnlyStrong: true}, 1, HarmCounts{Leaked: 1, CrossFiled: 1}, "each flips its own message"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rep := evalWith(t, c.policy)
+			if rep.Overall.Total != 3 {
+				t.Fatalf("total = %d, want 3", rep.Overall.Total)
+			}
+			if rep.Overall.Agree != c.agree || rep.Harm != c.harm {
+				t.Errorf("agree %d harm %+v, want agree %d harm %+v (%s)", rep.Overall.Agree, rep.Harm, c.agree, c.harm, c.note)
+			}
+			if rep.Policy != c.policy {
+				t.Errorf("report policy = %+v", rep.Policy)
+			}
+		})
+	}
+}
+
+func TestEvalReportNamesActiveExperiments(t *testing.T) {
+	var plain, exp bytes.Buffer
+	_ = evalWith(t, classify.Policy{}).Write(&plain)
+	_ = evalWith(t, classify.Policy{ThreadFirst: true, OnlyStrong: true}).Write(&exp)
+	if strings.Contains(plain.String(), "Experiment") {
+		t.Errorf("default run must not mention experiments:\n%s", plain.String())
+	}
+	if !strings.Contains(exp.String(), "Experiment: thread-first, only-strong") {
+		t.Errorf("experiment run must name its policies:\n%s", exp.String())
+	}
+}
+
+func TestEvalHiddenKnownSenderDiagnostics(t *testing.T) {
+	rep := evalWith(t, classify.Policy{})
+	hk := rep.HiddenKnown
+	// One hidden message: a reply to your mail from h@help.test (route share 100%,
+	// 3 messages of history), not a mixed sender.
+	if hk.Total != 1 || hk.Replies != 1 || hk.InMyThread != 1 || hk.Mixed != 0 {
+		t.Errorf("HiddenKnown = %+v", hk)
+	}
+	if hk.ShareHigh != 1 || hk.ShareMid != 0 || hk.ShareLow != 0 {
+		t.Errorf("route share buckets = %+v", hk)
+	}
+	if hk.Hist3to9 != 1 || hk.Hist1to2 != 0 || hk.Hist10Plus != 0 {
+		t.Errorf("history buckets = %+v", hk)
+	}
+	var buf bytes.Buffer
+	_ = rep.Write(&buf)
+	for _, want := range []string{"known senders (1)", "replies 1", "in a thread you started 1", "route share", "history"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("report lacks %q:\n%s", want, buf.String())
+		}
+	}
+}
+
+func TestEvalHiddenKnownBucketsMixedAndNonReplies(t *testing.T) {
+	// harmMailbox hides m@mix.test (mixed, ~60% route, 5 messages) and b@bulk.test
+	// (route 100%, 3 messages); neither is a reply.
+	hk := runEval(t, harmMailbox()).HiddenKnown
+	if hk.Total != 2 || hk.Replies != 0 || hk.InMyThread != 0 || hk.Mixed != 1 {
+		t.Errorf("HiddenKnown = %+v", hk)
+	}
+	if hk.ShareHigh != 1 || hk.ShareMid != 1 || hk.ShareLow != 0 {
+		t.Errorf("route share buckets = %+v", hk)
+	}
+	if hk.Hist3to9 != 2 {
+		t.Errorf("history buckets = %+v", hk)
+	}
+}

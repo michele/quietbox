@@ -15,6 +15,7 @@ import (
 
 	"github.com/michele/quietbox/internal/classify"
 	"github.com/michele/quietbox/internal/config"
+	"github.com/michele/quietbox/internal/learn"
 	"github.com/michele/quietbox/internal/mail"
 	"github.com/michele/quietbox/internal/store"
 )
@@ -26,7 +27,10 @@ type EvalOptions struct {
 	Cutoff time.Time
 	// History limits how far before the cutoff to learn from (0 = no limit).
 	// INBOX is always capped by learn.inbox_lookback, measured from the cutoff.
-	History  time.Duration
+	History time.Duration
+	// Policy switches on classification experiments (see classify.Policy). The
+	// zero value is the default behaviour.
+	Policy   classify.Policy
 	Progress func(msg string)
 }
 
@@ -59,6 +63,25 @@ type EvalRow struct {
 	Decision  classify.Decision
 	NewSender bool // nothing in the history (and no mail sent to them) before the cutoff
 	Mixed     bool // the sender's learned route is mixed
+
+	// Diagnostics for known senders: why might their mail be misfiled?
+	Reply      bool    // has In-Reply-To or References
+	InMyThread bool    // replies to mail you sent
+	RouteShare float64 // history share of the sender's route folder (0 for new senders)
+	History    int     // messages of history in the learning window (0 for new senders)
+}
+
+// HiddenKnown describes the INBOX messages from known senders that would have
+// been filed away: the ones detector tuning cannot explain. Aggregate only.
+type HiddenKnown struct {
+	Total      int
+	Replies    int // has In-Reply-To or References
+	InMyThread int // replies to mail you sent (a thread-first rule would keep them)
+	Mixed      int // the sender's route is mixed
+	// Route share: how dominant the route folder was in the sender's history.
+	ShareHigh, ShareMid, ShareLow int // >= 90%, 60-89%, < 60%
+	// History: messages from the sender in the learning window.
+	Hist1to2, Hist3to9, Hist10Plus int
 }
 
 // HarmCounts splits the disagreements by how much they hurt.
@@ -123,6 +146,9 @@ type EvalReport struct {
 	HiddenSenderMixed int
 	ByRuleStrength    map[RuleKey]RuleStat
 	Signals           []SignalCount // new-sender detector decisions, most common first
+
+	Policy      classify.Policy // experiments that were switched on
+	HiddenKnown HiddenKnown
 
 	HistoryMessages int // messages learned from
 	SkippedSelf     int // test messages from your own addresses
@@ -277,8 +303,12 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 	routes, _, domains := resolveRoutes(history, sentRows, p, o.Cutoff)
 	k := baseKnowledge(cfg)
 	k.SentIDs = sentIDs
+	k.Policy = o.Policy
+	rep.Policy = o.Policy
+	routeOf := map[string]learn.Route{}
 	for _, r := range routes {
 		k.Senders[r.Address] = classify.SenderRoute{Folder: r.Folder, Mixed: r.Mixed, Reason: r.Reason}
+		routeOf[r.Address] = r
 	}
 	for _, d := range domains {
 		k.Domains[d.Domain] = d.Folder
@@ -295,6 +325,14 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 		route, known := k.Senders[from]
 		row := EvalRow{Date: t.h.InternalDate, From: from, Actual: t.folder, Decision: d,
 			NewSender: !known && !k.SentTo[from], Mixed: route.Mixed}
+		row.Reply = t.h.InReplyTo != "" || len(t.h.References) > 0
+		row.InMyThread = classify.InThread(t.h, k.SentIDs)
+		if lr, ok := routeOf[from]; ok {
+			row.RouteShare = lr.Shares[lr.Folder]
+			for _, n := range lr.Counts {
+				row.History += n
+			}
+		}
 		rep.Rows = append(rep.Rows, row)
 
 		agree := row.Agrees()
@@ -341,6 +379,8 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 				}
 				if row.NewSender {
 					rep.HiddenImportantNew++
+				} else {
+					rep.HiddenKnown.add(row)
 				}
 			}
 		}
@@ -382,6 +422,50 @@ func Eval(ctx context.Context, cfg *config.Config, b mail.Backend, o EvalOptions
 	return rep, nil
 }
 
+func (h *HiddenKnown) add(r EvalRow) {
+	h.Total++
+	if r.Reply {
+		h.Replies++
+	}
+	if r.InMyThread {
+		h.InMyThread++
+	}
+	if r.Mixed {
+		h.Mixed++
+	}
+	switch {
+	case r.RouteShare >= 0.9:
+		h.ShareHigh++
+	case r.RouteShare >= 0.6:
+		h.ShareMid++
+	default:
+		h.ShareLow++
+	}
+	switch {
+	case r.History >= 10:
+		h.Hist10Plus++
+	case r.History >= 3:
+		h.Hist3to9++
+	default:
+		h.Hist1to2++
+	}
+}
+
+// names lists the switched-on experiments in a fixed order.
+func policyNames(p classify.Policy) []string {
+	var out []string
+	if p.ThreadFirst {
+		out = append(out, "thread-first")
+	}
+	if p.NoMixedOverride {
+		out = append(out, "no-mixed-override")
+	}
+	if p.OnlyStrong {
+		out = append(out, "only-strong")
+	}
+	return out
+}
+
 func pct(a Agreement) string {
 	return fmt.Sprintf("%d of %d (%.0f%%)", a.Agree, a.Total, a.Percent())
 }
@@ -391,8 +475,12 @@ func (r *EvalReport) Write(w io.Writer) error {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "Hold-out evaluation (nothing was changed): learned from %d messages before %s,\n",
 		r.HistoryMessages, r.Cutoff.Format("2006-01-02"))
-	fmt.Fprintf(&buf, "then classified the %d messages received on or after it. Skipped: %d from your own addresses, %d without a From.\n\n",
+	fmt.Fprintf(&buf, "then classified the %d messages received on or after it. Skipped: %d from your own addresses, %d without a From.\n",
 		r.Overall.Total, r.SkippedSelf, r.SkippedNoFrom)
+	if names := policyNames(r.Policy); len(names) > 0 {
+		fmt.Fprintf(&buf, "Experiment: %s (not the defaults)\n", strings.Join(names, ", "))
+	}
+	fmt.Fprintln(&buf)
 
 	fmt.Fprintf(&buf, "  agreement, all senders    %s\n", pct(r.Overall))
 	fmt.Fprintf(&buf, "  agreement, known senders  %s\n", pct(r.Known))
@@ -417,6 +505,12 @@ func (r *EvalReport) Write(w io.Writer) error {
 			parts = append(parts, part)
 		}
 		fmt.Fprintf(&buf, "  by rule: %s\n", strings.Join(parts, ", "))
+	}
+	if hk := r.HiddenKnown; hk.Total > 0 {
+		fmt.Fprintf(&buf, "  known senders (%d): replies %d (in a thread you started %d); route share >=90%% %d, 60-89%% %d, <60%% %d;\n"+
+			"    history 1-2 msgs %d, 3-9 %d, 10+ %d; mixed senders %d\n",
+			hk.Total, hk.Replies, hk.InMyThread, hk.ShareHigh, hk.ShareMid, hk.ShareLow,
+			hk.Hist1to2, hk.Hist3to9, hk.Hist10Plus, hk.Mixed)
 	}
 	fmt.Fprintln(&buf)
 

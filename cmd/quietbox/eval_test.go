@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/michele/quietbox/internal/classify"
 )
 
 func execEval(t *testing.T, args ...string) (string, error) {
@@ -42,5 +44,24 @@ func TestDefaultEvalCutoff(t *testing.T) {
 	got := defaultEvalCutoff(now)
 	if want := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC); !got.Equal(want) {
 		t.Errorf("default cutoff = %v, want %v (60 days back, start of day)", got, want)
+	}
+}
+
+func TestEvalExperimentFlagsExist(t *testing.T) {
+	cfg, _ := scanConfig(t)
+	// A bad cutoff is reported before connecting; an unknown flag would be a cobra error.
+	_, err := execEval(t, "--config", cfg, "--thread-first", "--no-mixed-override", "--only-strong", "--cutoff", "last-month")
+	if err == nil || !strings.Contains(err.Error(), "--cutoff") {
+		t.Errorf("err = %v, want the --cutoff error (so the experiment flags parsed)", err)
+	}
+}
+
+func TestEvalPolicyFromFlags(t *testing.T) {
+	p := (&evalFlags{threadFirst: true, onlyStrong: true}).policy()
+	if !p.ThreadFirst || p.NoMixedOverride || !p.OnlyStrong {
+		t.Errorf("policy = %+v", p)
+	}
+	if (&evalFlags{}).policy() != (classify.Policy{}) {
+		t.Error("no flags must give the default policy")
 	}
 }
