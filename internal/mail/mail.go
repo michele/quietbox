@@ -4,6 +4,7 @@ package mail
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -24,6 +25,18 @@ func (c Capabilities) Has(name string) bool {
 // HasObjectID reports whether the server supports OBJECTID (RFC 8474),
 // which gives stable EMAILID message keys.
 func (c Capabilities) HasObjectID() bool { return c.Has("OBJECTID") }
+
+// RequireMove returns an error unless the server advertises MOVE (RFC 6851)
+// and UIDPLUS (RFC 4315). quietbox never moves mail without both: MOVE so that
+// nothing is ever expunged by us, UIDPLUS so that undo can find the message again.
+func RequireMove(c Capabilities) error {
+	for _, need := range []string{"MOVE", "UIDPLUS"} {
+		if !c.Has(need) {
+			return fmt.Errorf("the server does not support %s, which quietbox needs to move mail safely", need)
+		}
+	}
+	return nil
+}
 
 // Folder describes one mailbox on the server.
 type Folder struct {
@@ -52,6 +65,34 @@ type Header struct {
 	// Precedence, ESP markers, ...), keyed by lower-case name, values trimmed.
 	// Only headers the backend explicitly requests ever appear here.
 	Signals map[string]string
+	// UID is the message's UID in Folder; it changes when the message moves.
+	// Zero when the backend did not report one.
+	UID uint32
+	// Flags are the IMAP flags (e.g. `\Seen`, `\Flagged`), as the server spells them.
+	Flags []string
+}
+
+// HasFlag reports whether the message carries the flag, case-insensitively.
+func (h Header) HasFlag(name string) bool {
+	for _, f := range h.Flags {
+		if strings.EqualFold(f, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// FolderStatus is what the server reports about a folder without opening it.
+// UIDs are only comparable while UIDValidity is unchanged.
+type FolderStatus struct {
+	UIDValidity uint32
+	UIDNext     uint32
+}
+
+// MoveResult says where a moved message landed (from COPYUID).
+type MoveResult struct {
+	UIDValidity uint32
+	UID         uint32
 }
 
 // Backend is the mailbox surface. Reads never change flags or messages.
