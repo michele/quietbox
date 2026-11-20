@@ -45,6 +45,8 @@ type Fake struct {
 	// OnCreate runs just before a folder is created, so tests can check what
 	// happened first (e.g. that the audit row already exists).
 	OnCreate func(name string)
+	// MoveFails makes Move of a source UID fail with the given error.
+	MoveFails map[uint32]error
 	// OnFetch runs at the start of FetchHeaders and FetchFrom, before any
 	// message is read, so tests can deliver mail "during" a scan.
 	OnFetch func(folder string)
@@ -200,6 +202,9 @@ func (f *Fake) Move(_ context.Context, from string, uid uint32, to string) (mail
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.MoveFails[uid]; err != nil {
+		return mail.MoveResult{}, err
+	}
 	if !f.hasFolder(from) || !f.hasFolder(to) {
 		return mail.MoveResult{}, fmt.Errorf("move %q -> %q: no such folder", from, to)
 	}
