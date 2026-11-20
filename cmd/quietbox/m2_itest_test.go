@@ -122,11 +122,11 @@ func assertNoSubjects(t *testing.T, what, text string) {
 //	vendor    reply to mail sent 05-05, bulk-looking       -> stays (thread beats detectors)
 //	editor    List-Id + List-Unsubscribe, left in INBOX    -> SaneNews (newsletter): a "hidden important" miss
 //	pizzeria  noreply@ + SES header + "Ricevuta", in INBOX -> SaneBulk (bulk)
-//	newbrand  Precedence bulk + List-Unsubscribe, in INBOX -> SaneLater (later)
+//	newbrand  Precedence bulk + X-Campaign-Id, in INBOX    -> SaneLater (later)
 //	freshpress  List-Id + List-Unsubscribe, in SaneNews    -> SaneNews (newsletter)
 //	indie     plain human-looking, filed in SaneNews       -> stays: a miss
 //	shoplab   noreply@ + SES header + "shipped", SaneBulk  -> SaneBulk (bulk)
-//	deals     Precedence bulk + List-Unsubscribe, SaneLater -> SaneLater (later)
+//	deals     Precedence bulk + X-Campaign-Id, SaneLater   -> SaneLater (later)
 var m2Verdicts = []struct {
 	from, actual, predicted string
 	rule                    classify.Rule

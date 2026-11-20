@@ -25,6 +25,7 @@ func testKnowledge() Knowledge {
 			"writer@paper.test":     {Folder: "SaneNews", Reason: "learned: SaneNews 100%"},
 			"friend@friends.test":   {Folder: "INBOX", Reason: "sent to sender 3 time(s)"},
 			"store@big.test":        {Folder: "SaneLater", Mixed: true, Reason: "learned: SaneLater 60%, SaneBulk 40%"},
+			"orders@shoplate.test":  {Folder: "SaneLater", Mixed: true, Reason: "learned: SaneLater 60%, SaneBulk 40%"},
 			"orders@bigbulk.test":   {Folder: "SaneBulk", Mixed: true, Reason: "learned: SaneBulk 70%, SaneLater 30%"},
 			"filed@bulky.test":      {Folder: "SaneBulk", Reason: "learned: SaneBulk 100%"},
 			"replyer@helpdesk.test": {Folder: "SaneBulk", Reason: "learned: SaneBulk 100%"},
@@ -70,10 +71,10 @@ func TestClassify(t *testing.T) {
 
 		// mixed senders: majority unless a detector is strong
 		{name: "mixed, nothing fires", h: msg("store@big.test", "Big sale"), wantFolder: "SaneLater", wantRule: RuleSender},
-		{name: "mixed, weak detector does not override", h: msg("store@big.test", "Hello", "x-ses-outgoing", "1"), wantFolder: "SaneLater", wantRule: RuleSender},
-		{name: "mixed, strong bulk overrides", h: msg("store@big.test", "Your order #12 has shipped", "x-ses-outgoing", "1"), wantFolder: "SaneBulk", wantRule: RuleSenderOverride, wantSignals: true, reasonHas: "SaneLater"},
+		{name: "mixed, weak detector does not override", h: msg("orders@shoplate.test", "Hello"), wantFolder: "SaneLater", wantRule: RuleSender},
+		{name: "mixed, strong bulk overrides", h: msg("orders@shoplate.test", "Your order #12 has shipped"), wantFolder: "SaneBulk", wantRule: RuleSenderOverride, wantSignals: true, reasonHas: "SaneLater"},
 		{name: "mixed, strong detector agreeing with route is no override", h: msg("orders@bigbulk.test", "Your order #12 has shipped", "x-ses-outgoing", "1"), wantFolder: "SaneBulk", wantRule: RuleSender},
-		{name: "mixed, strong override needs a target", h: msg("store@big.test", "Your order #12 has shipped", "x-ses-outgoing", "1"),
+		{name: "mixed, strong override needs a target", h: msg("orders@shoplate.test", "Your order #12 has shipped"),
 			targets: Targets{config.TypeLater: "SaneLater"}, wantFolder: "SaneLater", wantRule: RuleSender},
 
 		// 3. sent-to and thread
@@ -93,7 +94,8 @@ func TestClassify(t *testing.T) {
 		// 5. detectors, in order
 		{name: "newsletter detector", h: newsletterish("new@weekly.test"), wantFolder: "SaneNews", wantRule: RuleNewsletter, wantSignals: true},
 		{name: "bulk detector", h: msg("noreply@shop.test", "Your receipt"), wantFolder: "SaneBulk", wantRule: RuleBulk, wantSignals: true},
-		{name: "later detector", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>"), wantFolder: "SaneLater", wantRule: RuleLater, wantSignals: true},
+		{name: "unsubscribe without list-id is a newsletter", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>"), wantFolder: "SaneNews", wantRule: RuleNewsletter, wantSignals: true},
+		{name: "later detector", h: msg("promo@store.test", "Sale", "precedence", "bulk"), wantFolder: "SaneLater", wantRule: RuleLater, wantSignals: true},
 		{name: "weak detectors still file unknown mail", h: msg("alerts@forge.test", "Build finished"), wantFolder: "SaneBulk", wantRule: RuleBulk},
 		{name: "newsletter beats bulk and later", h: func() mail.Header {
 			h := newsletterish("noreply@news.test")
@@ -153,7 +155,7 @@ func TestDecisionStrength(t *testing.T) {
 	}{
 		{"strong newsletter", withListID(msg("n@new.test", "Issue", "list-unsubscribe", "<https://x.test/u>"), "N <n.test>"), Strong},
 		{"weak bulk", msg("alerts@forge.test", "Build finished"), Weak},
-		{"mixed override is strong", msg("store@big.test", "Your order #12 has shipped", "x-ses-outgoing", "1"), Strong},
+		{"mixed override is strong", msg("orders@shoplate.test", "Your order #12 has shipped"), Strong},
 		{"sender route has no strength", msg("writer@paper.test", "Post"), None},
 		{"no rule has no strength", msg("stranger@somewhere.test", "Hello"), None},
 	}

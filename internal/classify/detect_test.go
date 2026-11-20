@@ -87,7 +87,13 @@ func TestDetectNewsletter(t *testing.T) {
 		{name: "ghost publication", h: msg("site@somepub.ghost.io", "A post"), want: Strong},
 		{name: "lookalike domain", h: msg("x@notsubstack.com", "Not a platform"), want: None},
 		{name: "lookalike suffix", h: msg("x@substack.com.evil.test", "Not a platform"), want: None},
-		{name: "unsubscribe without list-id is not a newsletter", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>"), want: None},
+		// Evidence: list-unsubscribe without List-Id went to SaneNews 10 of 10, with
+		// Precedence: bulk (and Feedback-ID) 8 of 8.
+		{name: "unsubscribe alone is a weak newsletter", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>"), want: Weak, signal: "list-unsubscribe"},
+		{name: "unsubscribe + precedence bulk is a strong newsletter", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>", "precedence", "bulk"), want: Strong, signal: "precedence bulk"},
+		{name: "unsubscribe + feedback-id + precedence", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>", "precedence", "bulk", "feedback-id", "1:c:s"), want: Strong},
+		{name: "unsubscribe from a noreply sender is not a newsletter", h: msg("noreply@store.test", "Your receipt", "list-unsubscribe", "<mailto:u@store.test>"), want: None},
+		{name: "precedence bulk alone is not a newsletter", h: msg("x@y.test", "Hi", "precedence", "bulk"), want: None},
 		{name: "ESP marker alone is not a newsletter", h: msg("promo@store.test", "Sale", "x-mc-user", "abc123"), want: None},
 	}, human...)
 	runDetect(t, config.TypeNewsletter, DetectNewsletter, cases)
@@ -96,15 +102,20 @@ func TestDetectNewsletter(t *testing.T) {
 func TestDetectBulk(t *testing.T) {
 	cases := append([]detectCase{
 		{name: "noreply + order shipped", h: msg("noreply@shop.test", "Your order #123 has shipped"), want: Strong, signal: "order"},
-		{name: "SES + receipt", h: msg("team@app.test", "Receipt for your payment", "x-ses-outgoing", "2026.05.20-54.240.1.1"), want: Strong, signal: "x-ses-outgoing"},
+		// Evidence: a noreply-style sender was in SaneBulk 13 of 18 times. An ESP header
+		// (with or without a keyword) from a non-noreply sender was almost never Bulk:
+		// SES + keyword went to SaneLater 10 of 10, ESP alone to News/Later 26 of 28.
+		{name: "noreply + SES header is strong", h: msg("noreply@app.test", "Welcome", "x-ses-outgoing", "2026.05.20-54.240.1.1"), want: Strong, signal: "x-ses-outgoing"},
+		{name: "noreply + SES + receipt", h: msg("noreply@app.test", "Receipt for your payment", "x-ses-outgoing", "1"), want: Strong},
+		{name: "SES + keyword without a noreply sender is not bulk", h: msg("team@app.test", "Receipt for your payment", "x-ses-outgoing", "2026.05.20-54.240.1.1"), want: None},
 		{name: "italian receipt", h: msg("noreply@negozio.test", "Ricevuta del tuo ordine n. 55"), want: Strong},
 		{name: "italian invoice from billing", h: msg("billing@servizi.test", "Fattura 2026-14"), want: Strong},
-		{name: "postmark + delivery", h: msg("hello@app.test", "Your delivery is on its way", "x-pm-message-id", "abc"), want: Strong},
-		{name: "sendgrid + password reset", h: msg("security@app.test", "Password reset", "x-sg-eid", "abc"), want: Strong},
+		{name: "postmark + noreply + delivery", h: msg("noreply@app.test", "Your delivery is on its way", "x-pm-message-id", "abc"), want: Strong},
+		{name: "sendgrid + keyword without a noreply sender", h: msg("security@app.test", "Password reset", "x-sg-eid", "abc"), want: None},
 		{name: "notifications local part only", h: msg("notifications@forge.test", "Someone commented"), want: Weak, signal: "notifications"},
 		{name: "plus-addressed noreply", h: msg("no-reply+abc123@app.test", "Welcome aboard"), want: Weak},
 		{name: "noreply-suffixed local part", h: msg("noreply-billing@app.test", "Welcome aboard"), want: Weak},
-		{name: "ESP alone", h: msg("hello@app.test", "Hello", "x-mailgun-sid", "abc"), want: Weak},
+		{name: "ESP alone is not bulk", h: msg("hello@app.test", "Hello", "x-mailgun-sid", "abc"), want: None},
 		{name: "similar word is not a keyword", h: msg("noreply@app.test", "An ordinary day"), want: Weak},
 		{name: "list mail is never bulk", h: withListID(msg("noreply@lists.test", "Your order digest"), "Lists <lists.test>"), want: None},
 		{name: "keyword alone from unknown sender", h: msg("shop@store.test", "Your order has shipped"), want: None},
@@ -119,6 +130,8 @@ func TestDetectLater(t *testing.T) {
 		{name: "precedence list", h: msg("x@y.test", "Hi", "precedence", "list"), want: Weak},
 		{name: "precedence junk", h: msg("x@y.test", "Hi", "precedence", "junk"), want: Weak},
 		{name: "precedence first-class is not automated", h: msg("x@y.test", "Hi", "precedence", "first-class"), want: None},
+		{name: "feedback-id alone is not a signal", h: msg("x@y.test", "Hi", "feedback-id", "1:camp:store"), want: None},
+		{name: "feedback-id + precedence", h: msg("x@y.test", "Hi", "feedback-id", "1:c:s", "precedence", "bulk"), want: Strong},
 		{name: "unsubscribe + feedback-id", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>", "feedback-id", "1:camp:store"), want: Strong},
 		{name: "unsubscribe only", h: msg("promo@store.test", "Sale", "list-unsubscribe", "<mailto:u@store.test>"), want: Weak},
 		{name: "auto-generated", h: msg("system@x.test", "Report", "auto-submitted", "auto-generated"), want: Weak},

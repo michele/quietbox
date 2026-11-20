@@ -99,6 +99,16 @@ func DetectNewsletter(h mail.Header) Match {
 			}
 		}
 	}
+	// List-Unsubscribe without a List-Id is how most newsletters and marketing mail
+	// look. System mail (noreply and friends) with an unsubscribe link is not one.
+	if h.ListID == "" && unsub && !transactionalLocal(h.From) && m.Strength == None {
+		m.Signals = append(m.Signals, "list-unsubscribe present")
+		m.Strength = Weak
+		if p := strings.ToLower(h.Signals["precedence"]); p == "bulk" || p == "list" || p == "junk" {
+			m.Signals = append(m.Signals, "precedence "+p)
+			m.Strength = Strong
+		}
+	}
 	if m.Strength == None {
 		m.Signals = nil
 	}
@@ -106,26 +116,28 @@ func DetectNewsletter(h mail.Header) Match {
 }
 
 // DetectBulk looks for receipts, order updates and account notifications.
+// It needs a system-style sender (noreply, notifications, billing...). Email
+// service headers (SES, SendGrid...) and subject keywords only add strength:
+// those services carry plenty of marketing, so on their own they are no evidence
+// (on real mail, ESP-only mail was almost never filed as bulk).
 // Mail with a List-Id is never bulk: it belongs to a list.
 func DetectBulk(h mail.Header) Match {
 	m := Match{Type: config.TypeBulk}
 	if h.ListID != "" {
 		return m
 	}
-	var automated []string
-	if tok := transactionalToken(h.From); tok != "" {
-		automated = append(automated, "sender local part "+tok)
-	}
-	for _, k := range transactionalESP {
-		if has(h, k) {
-			automated = append(automated, "header "+k)
-		}
-	}
-	if len(automated) == 0 {
+	tok := transactionalToken(h.From)
+	if tok == "" {
 		return m
 	}
-	m.Signals = automated
+	m.Signals = []string{"sender local part " + tok}
 	m.Strength = Weak
+	for _, k := range transactionalESP {
+		if has(h, k) {
+			m.Signals = append(m.Signals, "header "+k)
+			m.Strength = Strong
+		}
+	}
 	if kw := bulkKeywords.FindString(h.Subject); kw != "" {
 		m.Signals = append(m.Signals, "subject keyword "+strings.ToLower(kw))
 		m.Strength = Strong
@@ -144,10 +156,8 @@ func DetectLater(h mail.Header) Match {
 	if a := autoSubmitted(h.Signals["auto-submitted"]); a != "" {
 		m.Signals = append(m.Signals, "auto-submitted "+a)
 	}
-	for _, k := range []string{"list-unsubscribe", "feedback-id"} {
-		if has(h, k) {
-			m.Signals = append(m.Signals, "header "+k)
-		}
+	if has(h, "list-unsubscribe") {
+		m.Signals = append(m.Signals, "header list-unsubscribe")
 	}
 	for _, k := range marketingESP {
 		if has(h, k) {
@@ -161,6 +171,11 @@ func DetectLater(h mail.Header) Match {
 				break
 			}
 		}
+	}
+	// Feedback-ID is on mail of every kind, including real correspondence: it only
+	// counts as a supporting signal.
+	if len(m.Signals) > 0 && has(h, "feedback-id") {
+		m.Signals = append(m.Signals, "header feedback-id")
 	}
 	switch {
 	case len(m.Signals) >= 2:
