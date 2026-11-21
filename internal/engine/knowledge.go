@@ -18,7 +18,7 @@ func KnowledgeFromStore(ctx context.Context, cfg *config.Config, st *store.Store
 		return k, nil, err
 	}
 	for _, s := range senders {
-		k.Senders[s.Address] = classify.SenderRoute{Folder: s.RouteFolder, Mixed: s.Mixed, Reason: s.Reason}
+		k.Senders[s.Address] = classify.SenderRoute{Folder: s.RouteFolder, Mixed: s.Mixed, Trained: s.RouteSource == store.SourceTrained, Reason: s.Reason}
 	}
 	domains, err := st.Domains(ctx)
 	if err != nil {

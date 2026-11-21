@@ -88,6 +88,15 @@ func runConnected(ctx context.Context, cfg *config.Config, st *store.Store, o Ru
 		}
 		*failures = 0 // a clean pass: the connection is healthy
 		say("pass done: %d new, %d moved, %d failed", rep.Fetched, len(rep.Moves)-rep.Failed, rep.Failed)
+		for _, t := range rep.Trained {
+			say("%s", t)
+		}
+		if n := rep.TrainedSenders(); n > 0 {
+			say("trained %d sender(s)", n)
+		}
+		for _, n := range rep.Notes {
+			say("note: %s", n)
+		}
 		for _, w := range rep.Warnings {
 			say("warning: %s", w)
 		}

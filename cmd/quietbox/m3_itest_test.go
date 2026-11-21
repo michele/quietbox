@@ -49,11 +49,18 @@ func rawLogin(t *testing.T, user string) (*imapclient.Client, func()) {
 // inside every lookback.
 func (e *m3Env) deliver(folder, from, msgID string, flags ...imap.Flag) {
 	e.t.Helper()
+	e.deliverBody(folder, from, msgID, "body", flags...)
+}
+
+// deliverBody is deliver with a chosen body, e.g. a unique marker that output
+// must never contain.
+func (e *m3Env) deliverBody(folder, from, msgID, body string, flags ...imap.Flag) {
+	e.t.Helper()
 	c, done := rawLogin(e.t, e.user)
 	defer done()
 	now := time.Now().UTC()
-	msg := fmt.Sprintf("From: <%s>\r\nTo: <%s>\r\nSubject: m3 test\r\nDate: %s\r\nMessage-ID: %s\r\n\r\nbody\r\n",
-		from, e.user, now.Format(time.RFC1123Z), msgID)
+	msg := fmt.Sprintf("From: <%s>\r\nTo: <%s>\r\nSubject: m3 test\r\nDate: %s\r\nMessage-ID: %s\r\n\r\n%s\r\n",
+		from, e.user, now.Format(time.RFC1123Z), msgID, body)
 	cmd := c.Append(folder, int64(len(msg)), &imap.AppendOptions{Flags: flags, Time: now})
 	if _, err := cmd.Write([]byte(msg)); err != nil {
 		e.t.Fatal(err)

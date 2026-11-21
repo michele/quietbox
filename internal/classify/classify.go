@@ -27,9 +27,10 @@ const (
 
 // SenderRoute is the stored route for one sender.
 type SenderRoute struct {
-	Folder string
-	Mixed  bool   // legitimately belongs in more than one folder
-	Reason string // why the route was learned, for explanations
+	Folder  string
+	Mixed   bool   // legitimately belongs in more than one folder
+	Trained bool   // the user moved mail from this sender (M4)
+	Reason  string // why the route was learned, for explanations
 }
 
 // Policy holds experiments that change how Classify decides, not what it knows.
@@ -115,6 +116,9 @@ func Classify(h mail.Header, k Knowledge, t Targets) Decision {
 			if d, ok := mixedOverride(h, r, t); ok {
 				return d
 			}
+		}
+		if r.Folder == k.Inbox {
+			return Decision{Folder: r.Folder, Rule: RuleSender, Reason: fmt.Sprintf("sender stays in %s (%s)", k.Inbox, r.Reason)}
 		}
 		return Decision{Folder: r.Folder, Rule: RuleSender, Reason: fmt.Sprintf("sender route to %s (%s)", r.Folder, r.Reason)}
 	}

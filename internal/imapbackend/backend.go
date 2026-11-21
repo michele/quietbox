@@ -207,6 +207,26 @@ func (b *Backend) FetchFrom(ctx context.Context, folder string, fromUID uint32, 
 	return b.fetchMatching(ctx, folder, crit, time.Time{}, fromUID, fn)
 }
 
+// FetchOne returns the header of one message by UID. It goes through
+// fetchMatching, so the folder is opened read-only and only BODY.PEEK header
+// fields are requested: nothing is marked seen.
+func (b *Backend) FetchOne(ctx context.Context, folder string, uid uint32) (mail.Header, bool, error) {
+	var set imap.UIDSet
+	set.AddNum(imap.UID(uid))
+	crit := &imap.SearchCriteria{UID: []imap.UIDSet{set}}
+	var found mail.Header
+	var ok bool
+	err := b.fetchMatching(ctx, folder, crit, time.Time{}, uid, func(batch []mail.Header) error {
+		for _, h := range batch {
+			if h.UID == uid {
+				found, ok = h, true
+			}
+		}
+		return nil
+	})
+	return found, ok, err
+}
+
 // fetchMatching opens folder read-only, finds the messages matching crit and
 // fetches their headers in batches. since and minUID filter exactly what the
 // server's search only approximates (SINCE is date-only; "n:*" always matches

@@ -3,12 +3,13 @@
 A self-hosted, open-source alternative to SaneBox: a Go CLI/daemon that watches an IMAP
 mailbox and moves non-urgent mail out of the inbox, learning from the folders you move mail into.
 
-**Status: M3 (run for real).** `check`, `init`, `senders`, `scan`, `eval`, `once`, `run` and `undo`
-exist. quietbox learns where your mail goes today (`init`), then files **new** INBOX mail as it
-arrives (`once` for cron, `run` as a daemon). It never deletes or expunges anything, every move is
-written to an audit log first, and `undo` reverses it. It does not yet learn from folders you move
-mail into (M4). **It has not been tried on a real provider yet**: it has been run end to end only
-against the Dovecot test server. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+**Status: M4 (training).** `check`, `init`, `senders` (with `set`/`unset`), `scan`, `eval`, `once`,
+`run`, `undo` and `explain` exist. quietbox learns where your mail goes today (`init`), then files
+**new** INBOX mail as it arrives (`once` for cron, `run` as a daemon), and learns from the mail you
+move by hand: file a message into a folder and that sender goes there; drag one back to INBOX and
+that sender stays in INBOX. It never deletes or expunges anything, every move is written to an audit
+log first, and `undo` reverses it. **It has not been tried on a real provider yet**: it has been run
+end to end only against the Dovecot test server. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Configuration
 
@@ -189,7 +190,75 @@ Safety:
   delay (5s up to 5 min) and stops on anything that needs you (no MOVE, nothing learned yet).
 - `undo` leaves alone anything you moved yourself since, and reports it. The audit log stores no
   addresses or subjects, so `undo` shows folders and the reason a message was filed.
-- Sender routes only change when you re-run `init`; learning from your own moves is M4.
+- Sender routes change when you re-run `init`, when you move mail by hand (see below) and with
+  `senders set`/`unset`.
+
+### Training: move mail by hand
+
+Teach quietbox the way you taught SaneBox, from any mail client:
+
+- **Move a message into a configured folder** (from INBOX or from another folder): that sender's mail
+  goes there from now on.
+- **Move a message back to INBOX** from a configured folder: that sender stays in INBOX from now on.
+- One move is enough and the **last move wins**. Your moves beat everything quietbox learned or detected.
+
+```sh
+quietbox once            # ... trained writer@news.test: you moved a message from SaneNews to INBOX
+quietbox senders         # the sender now shows ROUTE INBOX, SOURCE trained
+```
+
+How it works: every configured folder has a cursor like INBOX, and each `once`/`run` pass reads only
+the mail that **arrived** in it since the last pass, *before* it files new INBOX mail (so the mail that
+woke `run` already goes where you just said). An arrival that quietbox did not put there itself is a
+move by you; quietbox recognises its own moves by the UID they landed on, so its own filing and `undo`
+never train. A message arriving in INBOX counts as "moved back" only if it was last seen in a
+configured folder and keeps its original arrival date (a move does, a fresh delivery does not).
+Training changes only the local database, never the mailbox.
+
+- `run` waits (IDLE) on INBOX only. A move into another folder is noticed at the next pass, which
+  comes with the next INBOX delivery, a drag back to INBOX (the new message wakes `run` too), or at
+  the latest 20 minutes later (the IDLE refresh).
+- A later copy (same Message-ID, delivered again) of any message quietbox has seen in a configured
+  folder, whether it filed the message or `init` saw it there, stays in INBOX untouched (not
+  classified) and teaches nothing.
+- On a server that does not keep the arrival date (INTERNALDATE) when a message is moved, a drag
+  back to INBOX is not learned; the message is never moved out of INBOX again either. Dovecot keeps
+  it; other servers are not verified.
+- Mail from your own addresses, and mail without a usable From, never trains.
+- `once --dry-run` prints `would train ...` and writes nothing.
+- **Upgrading a database from before M4:** training starts at the first `once`/`run` (a `note:` says
+  so); moves made earlier are not learned, and messages you filed by hand earlier are only recognised
+  when you move them back to INBOX after you re-run `init` (or `learn`).
+- There is no setting to turn training off; `senders unset` undoes a trained route.
+
+### Setting routes by hand: `senders set`, `senders unset`
+
+```sh
+quietbox senders set promo@deals.test SaneBulk   # always file this sender into SaneBulk
+quietbox senders set alice@friends.test INBOX    # always keep this sender in INBOX
+quietbox senders unset promo@deals.test          # remove the trained route
+```
+
+- The folder must be one of your configured folders (or INBOX), and the address must contain `@`;
+  both are checked before waiting for the lock, so a typo fails at once. Addresses are matched lower-case.
+- `unset` removes only a trained route. If the sender had a learned route before you trained it, that
+  route comes back at the next `init`/`learn`, not immediately: until then the sender has no route.
+- Both work on the database only (no IMAP login) and take the instance lock, **waiting** for it
+  ("waiting for another quietbox...") rather than failing. `quietbox run` holds the lock for as long as
+  it runs, so **while a daemon is up they wait until it stops**: stop `run`, set the route, start it
+  again (Ctrl-C stops the waiting).
+
+### Why did it do that? `explain`
+
+```sh
+quietbox explain '<message-id@example.com>'     # look up by Message-ID (angle brackets optional)
+quietbox explain --folder SaneNews 1234         # or by UID in a folder (default INBOX)
+```
+
+`explain` shows what quietbox would decide for that message **now**: the target folder, the rule,
+the reason and detector signals, the sender's route and where it came from (learned or trained), the
+latest training event, and the audit log rows for that message. It opens the folder read-only, takes
+no lock and writes nothing. It prints the sender address, UID and Message-ID, never the subject or body.
 
 ### Password sources
 
@@ -264,8 +333,8 @@ quietbox --account gmail once                                   # sort it; `undo
   days. Backlog mail is mostly already read, so it is swept even though `skip_seen` is on; **flagged mail
   is still left alone**, and so is anything quietbox has moved before. Without `--backlog`, only mail
   arriving after `init` is touched, as always.
-- With no history the detectors decide alone, and quietbox does not yet learn from folders you move mail
-  into (M4), so start with a short window and read the dry run carefully.
+- With no history the detectors decide alone, so start with a short window and read the dry run
+  carefully. Moving mistakes back by hand trains quietbox (see [Training](#training-move-mail-by-hand)).
 
 ## Development
 

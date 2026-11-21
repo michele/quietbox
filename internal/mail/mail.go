@@ -110,6 +110,9 @@ type Backend interface {
 	// FetchFrom streams the headers (with UID and flags) of messages whose UID
 	// is at least fromUID, in UID order. Read-only: no flag is changed.
 	FetchFrom(ctx context.Context, folder string, fromUID uint32, fn func([]Header) error) error
+	// FetchOne returns the header of one message by UID; ok is false when the
+	// folder has no such UID. Read-only: no flag is changed.
+	FetchOne(ctx context.Context, folder string, uid uint32) (Header, bool, error)
 	// Move moves one message and returns where it landed. It must refuse (and
 	// never expunge) unless the server supports MOVE and UIDPLUS (RequireMove).
 	// Callers must write the audit row first. A result UID of 0 means the

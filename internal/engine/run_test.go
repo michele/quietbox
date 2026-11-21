@@ -239,8 +239,8 @@ func TestRunDoesNotSpinWhenTheNewestMessageWasDeleted(t *testing.T) {
 	waitFor(t, "the first pass", func() bool { return fake.MoveCount() == 7 })
 	time.Sleep(100 * time.Millisecond)
 	_ = stop()
-	if n := fetches.Load(); n > 4 { // a pass fetches INBOX and Sent; a spin would be hundreds
-		t.Errorf("%d fetches: the loop is spinning", n)
+	if n := fetches.Load(); n > 2 { // one or two passes fetch INBOX once each; a spin would be hundreds
+		t.Errorf("%d INBOX fetches: the loop is spinning", n)
 	}
 }
 
@@ -249,7 +249,11 @@ type countingFetch struct {
 	n *atomic.Int32
 }
 
+// FetchFrom counts INBOX fetches only: a pass also reads Sent and every typed
+// folder, which says nothing about spinning.
 func (c *countingFetch) FetchFrom(ctx context.Context, folder string, from uint32, fn func([]mail.Header) error) error {
-	c.n.Add(1)
+	if folder == "INBOX" {
+		c.n.Add(1)
+	}
 	return c.Fake.FetchFrom(ctx, folder, from, fn)
 }

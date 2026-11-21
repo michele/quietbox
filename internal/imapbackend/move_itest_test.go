@@ -198,3 +198,19 @@ func TestItestWaitForChangeRefreshes(t *testing.T) {
 		t.Fatalf("refresh should return nil, got %v", err)
 	}
 }
+
+func TestItestFetchOneIsReadOnly(t *testing.T) {
+	b, ctx := dial(t)
+	f := scratch(t, b, ctx)
+	id := deliver(t, f)
+	h, ok, err := b.FetchOne(ctx, f, 1)
+	if err != nil || !ok || h.MessageID != id || h.UID != 1 || h.From != "sender@example.test" {
+		t.Fatalf("FetchOne(1) = %+v, %v, %v", h, ok, err)
+	}
+	if h.HasFlag(`\Seen`) {
+		t.Error("FetchOne set \\Seen")
+	}
+	if _, ok, err := b.FetchOne(ctx, f, 42); err != nil || ok {
+		t.Errorf("FetchOne(42) ok=%v err=%v, want not found", ok, err)
+	}
+}

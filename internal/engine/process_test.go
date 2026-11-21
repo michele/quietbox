@@ -425,6 +425,21 @@ func TestReconcilePlannedMissing(t *testing.T) {
 	}
 }
 
+// A planned undo_move whose message is not back where the undo sent it did
+// not happen: the row fails and the original move stays as it was.
+func TestReconcilePlannedUndoMissing(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	orig, _ := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: "m:<ghost>", FromFolder: "INBOX", ToFolder: "SaneBulk", Reason: "r", At: learnNow, Status: store.AuditDone})
+	undo, _ := st.AddAudit(bg, store.AuditRow{Action: store.ActionUndoMove, MessageKey: "m:<ghost>", FromFolder: "SaneBulk", ToFolder: "INBOX", Reason: "r", At: learnNow, Status: store.AuditPlanned})
+	runProcess(t, fake, st, cfg, false)
+	if r := auditRow(t, st, undo); r.Status != store.AuditFailed {
+		t.Errorf("undo_move row = %+v, want failed", r)
+	}
+	if auditRow(t, st, orig).Undone {
+		t.Error("the original move was marked undone by an undo that did not happen")
+	}
+}
+
 func TestReconcileSkippedInDryRun(t *testing.T) {
 	fake, st, cfg := processBox(t)
 	id, _ := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: "m:<ghost>", FromFolder: "INBOX", ToFolder: "SaneBulk", Reason: "r", At: learnNow, Status: store.AuditPlanned})

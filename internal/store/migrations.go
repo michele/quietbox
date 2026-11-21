@@ -82,4 +82,24 @@ CREATE TABLE meta (
 );
 ALTER TABLE cursors ADD COLUMN backlog_below INTEGER NOT NULL DEFAULT 0;
 `,
+	// 5: training. messages remembers where each message was last seen (to
+	// detect moves between passes); training logs the user's filing actions.
+	// Keys, folders and addresses only, never subjects or bodies.
+	`
+CREATE TABLE messages (
+	key           TEXT PRIMARY KEY,
+	folder        TEXT NOT NULL,
+	internal_date INTEGER NOT NULL
+);
+CREATE INDEX messages_folder ON messages(folder);
+CREATE TABLE training (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	at          INTEGER NOT NULL,
+	sender      TEXT NOT NULL,
+	folder      TEXT NOT NULL,
+	source      TEXT NOT NULL,
+	message_key TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX training_sender ON training(sender);
+`,
 }

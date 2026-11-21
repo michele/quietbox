@@ -111,3 +111,20 @@ func TestFakeWaitForChange(t *testing.T) {
 		t.Fatal("expected ctx error when nothing wakes it")
 	}
 }
+
+func TestFakeFetchOne(t *testing.T) {
+	f := &Fake{
+		Folders:  []mail.Folder{{Name: "INBOX"}},
+		Messages: map[string][]mail.Header{"INBOX": {{From: "a@x.test", MessageID: "<a>", Subject: "s"}, {From: "b@x.test", MessageID: "<b>"}}},
+	}
+	h, ok, err := f.FetchOne(ctx, "INBOX", 2)
+	if err != nil || !ok || h.MessageID != "<b>" || h.UID != 2 || h.Folder != "INBOX" {
+		t.Fatalf("FetchOne(2) = %+v, %v, %v", h, ok, err)
+	}
+	if _, ok, err := f.FetchOne(ctx, "INBOX", 99); err != nil || ok {
+		t.Errorf("FetchOne(99) ok=%v err=%v, want not found", ok, err)
+	}
+	if _, _, err := f.FetchOne(ctx, "Nope", 1); err == nil {
+		t.Error("unknown folder should be an error")
+	}
+}

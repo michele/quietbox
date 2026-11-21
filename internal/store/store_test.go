@@ -191,7 +191,7 @@ func TestMigrationV2KeepsV1Data(t *testing.T) {
 		ALTER TABLE audit DROP COLUMN status;
 		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
 		ALTER TABLE audit DROP COLUMN dest_uid;
-		PRAGMA user_version = 1`); err != nil {
+		DROP TABLE messages; DROP TABLE training; PRAGMA user_version = 1`); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -344,7 +344,7 @@ func TestMigration3KeepsOldAuditRows(t *testing.T) {
 		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
 		ALTER TABLE audit DROP COLUMN dest_uid;
 		INSERT INTO audit(action, to_folder, reason, at) VALUES ('create_folder','X','r',1);
-		PRAGMA user_version = 2`); err != nil {
+		DROP TABLE messages; DROP TABLE training; PRAGMA user_version = 2`); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -444,7 +444,7 @@ func TestMigration4KeepsOldData(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simulate a database left at schema v3 (no meta table, no backlog column).
-	if _, err := s.db.Exec(`DROP TABLE meta; ALTER TABLE cursors DROP COLUMN backlog_below; PRAGMA user_version = 3`); err != nil {
+	if _, err := s.db.Exec(`DROP TABLE messages; DROP TABLE training; DROP TABLE meta; ALTER TABLE cursors DROP COLUMN backlog_below; PRAGMA user_version = 3`); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -493,5 +493,21 @@ func TestCursorBacklogRoundTrip(t *testing.T) {
 	}
 	if got, _, _ := s.Cursor(ctx, "INBOX"); got != want {
 		t.Fatalf("Tx.SetCursor: %+v", got)
+	}
+}
+
+func TestPlannedMovesIncludesUndoMoves(t *testing.T) {
+	s := openTest(t)
+	mv, _ := s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "m:<a>", ToFolder: "News", Reason: "r", At: at(1), Status: AuditPlanned})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "m:<b>", ToFolder: "News", Reason: "r", At: at(2), Status: AuditDone})
+	undo, _ := s.AddAudit(ctx, AuditRow{Action: ActionUndoMove, MessageKey: "m:<c>", ToFolder: "INBOX", Reason: "r", At: at(3), Status: AuditPlanned})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionUndoMove, MessageKey: "m:<d>", ToFolder: "INBOX", Reason: "r", At: at(4), Status: AuditFailed})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionCreateFolder, ToFolder: "X", Reason: "r", At: at(5), Status: AuditPlanned})
+	got, err := s.PlannedMoves(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != mv || got[1].ID != undo {
+		t.Fatalf("planned = %+v, want rows %d and %d", got, mv, undo)
 	}
 }

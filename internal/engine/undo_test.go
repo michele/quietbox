@@ -215,3 +215,38 @@ func TestUndoFailsWhenLocked(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestUndoTarget(t *testing.T) {
+	mv := func(id int64, key, from, to, status string, undone bool) store.AuditRow {
+		return store.AuditRow{ID: id, Action: store.ActionMove, MessageKey: key, FromFolder: from, ToFolder: to, Status: status, Undone: undone}
+	}
+	undo := store.AuditRow{ID: 10, Action: store.ActionUndoMove, MessageKey: "m:<a>", FromFolder: "SaneNews", ToFolder: "INBOX"}
+	tests := []struct {
+		name   string
+		rows   []store.AuditRow
+		wantID int64 // 0: none
+	}{
+		{"the matching move", []store.AuditRow{mv(1, "m:<a>", "INBOX", "SaneNews", store.AuditDone, false)}, 1},
+		{"newest of two", []store.AuditRow{mv(1, "m:<a>", "INBOX", "SaneNews", store.AuditDone, false), mv(3, "m:<a>", "INBOX", "SaneNews", store.AuditDone, false)}, 3},
+		{"already undone", []store.AuditRow{mv(1, "m:<a>", "INBOX", "SaneNews", store.AuditDone, true)}, 0},
+		{"failed move", []store.AuditRow{mv(1, "m:<a>", "INBOX", "SaneNews", store.AuditFailed, false)}, 0},
+		{"other key", []store.AuditRow{mv(1, "m:<b>", "INBOX", "SaneNews", store.AuditDone, false)}, 0},
+		{"other folder", []store.AuditRow{mv(1, "m:<a>", "INBOX", "SaneLater", store.AuditDone, false)}, 0},
+		{"later than the undo", []store.AuditRow{mv(11, "m:<a>", "INBOX", "SaneNews", store.AuditDone, false)}, 0},
+		{"undo_move rows are not targets", []store.AuditRow{{ID: 2, Action: store.ActionUndoMove, MessageKey: "m:<a>", FromFolder: "INBOX", ToFolder: "SaneNews", Status: store.AuditDone}}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			i, ok := undoTarget(tt.rows, undo)
+			if tt.wantID == 0 {
+				if ok {
+					t.Errorf("found row %d, want none", tt.rows[i].ID)
+				}
+				return
+			}
+			if !ok || tt.rows[i].ID != tt.wantID {
+				t.Errorf("undoTarget = %d, %v; want row %d", i, ok, tt.wantID)
+			}
+		})
+	}
+}

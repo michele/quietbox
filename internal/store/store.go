@@ -596,11 +596,12 @@ func (s *Store) SetAuditResult(ctx context.Context, id int64, status string, des
 	return err
 }
 
-// PlannedMoves returns move rows whose outcome was never recorded (a run was
-// interrupted between the audit row and the end of the move), oldest first.
+// PlannedMoves returns move and undo_move rows whose outcome was never
+// recorded (a run or an undo was interrupted between the audit row and the end
+// of the move), oldest first.
 func (s *Store) PlannedMoves(ctx context.Context) ([]AuditRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT "+auditCols+" FROM audit WHERE action = ? AND status = ? ORDER BY id", ActionMove, AuditPlanned)
+		"SELECT "+auditCols+" FROM audit WHERE action IN (?, ?) AND status = ? ORDER BY id", ActionMove, ActionUndoMove, AuditPlanned)
 	if err != nil {
 		return nil, err
 	}
