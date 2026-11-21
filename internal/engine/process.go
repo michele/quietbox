@@ -413,6 +413,9 @@ func inboxReturns(ctx context.Context, st *store.Store, o ProcessOptions, k *cla
 			continue
 		}
 		returned[h.UID] = true
+		if v == knownNotReturn {
+			continue // left in INBOX as it is; its messages row stays
+		}
 		forget = append(forget, a.Key)
 		origin := pt.known[a.Key].Folder
 		if origin == "" {

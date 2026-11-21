@@ -321,12 +321,19 @@ func TestProcessDragAndBackAgain(t *testing.T) {
 	}
 }
 
-func TestProcessFreshDuplicateDoesNotPin(t *testing.T) {
+// A later copy (same Message-ID, newer INTERNALDATE) of a message quietbox has
+// seen in a typed folder is not a return: it does not pin the sender, and it
+// is left in INBOX, neither classified nor moved.
+func TestProcessFreshDuplicateIsLeftAloneAndDoesNotPin(t *testing.T) {
 	t.Run("copy of a message we filed", func(t *testing.T) {
 		fake, st, cfg := processBox(t)
 		filedNewsletter(t, fake, func() *ProcessReport { return runProcess(t, fake, st, cfg, false) })
 		fake.Append("INBOX", newsletterMail("<n2>")) // same Message-ID, delivered later
+		base := fake.MoveCount()
 		rep := runProcess(t, fake, st, cfg, false)
+		if fake.MoveCount() != base || len(rep.Moves) != 0 || rep.Skipped != 1 || countFrom(fake, "INBOX", "newsletter@weekly.test") != 1 {
+			t.Errorf("the copy was not left in INBOX: moves=%+v skipped=%d", rep.Moves, rep.Skipped)
+		}
 		if len(rep.Trained) != 0 || len(trainingOf(t, st, "newsletter@weekly.test")) != 0 {
 			t.Errorf("a fresh duplicate pinned the sender: %+v", rep.Trained)
 		}
@@ -337,16 +344,75 @@ func TestProcessFreshDuplicateDoesNotPin(t *testing.T) {
 			t.Error("a fresh duplicate is not a return: the messages row must stay")
 		}
 	})
-	t.Run("copy of a message init saw in a typed folder", func(t *testing.T) {
+	// Before the conservative INBOX guard this copy was classified and moved
+	// to SaneNews; now any known key that is not a return stays in INBOX.
+	t.Run("copy of a message init saw in a typed folder is left alone too", func(t *testing.T) {
 		fake, st, cfg := processBox(t)
+		runProcess(t, fake, st, cfg, false) // file the fixture's new INBOX mail first
 		// <e1> from eve@club.test sits in SaneNews since before init (messages row, 20 days old).
 		fake.Append("INBOX", newMail("eve@club.test", 0, "<e1>", nil))
+		before := sendersSnapshot(t, st)
+		base := fake.MoveCount()
 		rep := runProcess(t, fake, st, cfg, false)
-		if len(trainedOf(rep, "eve@club.test")) != 0 {
-			t.Errorf("trained = %+v", rep.Trained)
+		assertNothingTrained(t, st, rep, before, "eve@club.test")
+		if _, moved := moveOf(rep, "eve@club.test"); moved || fake.MoveCount() != base || rep.Skipped != 1 || rep.Stayed != 0 {
+			t.Errorf("the copy was not left alone: moves=%+v skipped=%d stayed=%d", rep.Moves, rep.Skipped, rep.Stayed)
 		}
-		if m, ok := moveOf(rep, "eve@club.test"); !ok || m.To != "SaneNews" || m.Status != MoveDone {
-			t.Errorf("the duplicate was not classified like new mail: %+v (found %v)", m, ok)
+		if countFrom(fake, "INBOX", "eve@club.test") != 1 {
+			t.Error("the copy left INBOX")
+		}
+		if msgs, _ := st.Messages(bg); msgs["m:<e1>"].Folder != "SaneNews" {
+			t.Errorf("the messages row changed: %+v", msgs["m:<e1>"])
+		}
+	})
+}
+
+// A server (or client) that stamps a new INTERNALDATE when a message is moved:
+// a drag back to INBOX does not read as a return, so it is not learned, but
+// the message is never moved out of INBOX again.
+func TestProcessRestampedReturnIsLeftAlone(t *testing.T) {
+	t.Run("message quietbox filed", func(t *testing.T) {
+		fake, st, cfg := processBox(t)
+		uid := filedNewsletter(t, fake, func() *ProcessReport { return runProcess(t, fake, st, cfg, false) })
+		runProcess(t, fake, st, cfg, false)
+		var h mail.Header
+		for _, m := range fake.Messages["SaneNews"] {
+			if m.UID == uid {
+				h = m
+			}
+		}
+		if h.From != "newsletter@weekly.test" {
+			t.Fatal("setup: not the filed newsletter")
+		}
+		fake.Remove("SaneNews", uid)
+		h.UID, h.Flags, h.InternalDate = 0, nil, learnNow.Add(time.Minute) // restamped by the move
+		fake.Append("INBOX", h)
+		before := sendersSnapshot(t, st)
+		base := fake.MoveCount()
+		rep := runProcess(t, fake, st, cfg, false)
+		assertNothingTrained(t, st, rep, before, "newsletter@weekly.test")
+		if fake.MoveCount() != base || len(rep.Moves) != 0 || rep.Skipped != 1 || countFrom(fake, "INBOX", "newsletter@weekly.test") != 1 {
+			t.Errorf("the dragged-back message was moved out again: moves=%+v skipped=%d", rep.Moves, rep.Skipped)
+		}
+	})
+	t.Run("message filed by hand", func(t *testing.T) {
+		fake, st, cfg := processBox(t)
+		runProcess(t, fake, st, cfg, false)
+		h := newMail("w1@substack.test", 3, "<p6b>", nil)
+		uid := fake.Append("SaneNews", h) // filed by the user or a server rule
+		runProcess(t, fake, st, cfg, false)
+		fake.Remove("SaneNews", uid)
+		h.InternalDate = learnNow.Add(time.Minute)
+		fake.Append("INBOX", h)
+		before := sendersSnapshot(t, st)
+		base := fake.MoveCount()
+		rep := runProcess(t, fake, st, cfg, false)
+		assertNothingTrained(t, st, rep, before)
+		if fake.MoveCount() != base || len(rep.Moves) != 0 || rep.Skipped != 1 || rep.Stayed != 0 {
+			t.Errorf("the dragged-back message was classified: moves=%+v skipped=%d stayed=%d", rep.Moves, rep.Skipped, rep.Stayed)
+		}
+		if msgs, _ := st.Messages(bg); msgs["m:<p6b>"].Folder != "SaneNews" {
+			t.Errorf("the messages row changed: %+v", msgs["m:<p6b>"])
 		}
 	})
 }

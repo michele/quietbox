@@ -217,8 +217,12 @@ Training changes only the local database, never the mailbox.
 
 - `run` waits (IDLE) on INBOX only. A move into another folder is noticed at the next pass, which the
   next INBOX delivery triggers.
-- A second copy of a message quietbox already filed (same Message-ID, delivered again) stays in INBOX
-  untouched and teaches nothing.
+- A later copy (same Message-ID, delivered again) of any message quietbox has seen in a configured
+  folder, whether it filed the message or `init` saw it there, stays in INBOX untouched (not
+  classified) and teaches nothing.
+- On a server that does not keep the arrival date (INTERNALDATE) when a message is moved, a drag
+  back to INBOX is not learned; the message is never moved out of INBOX again either. Dovecot keeps
+  it; other servers are not verified.
 - Mail from your own addresses, and mail without a usable From, never trains.
 - `once --dry-run` prints `would train ...` and writes nothing.
 - **Upgrading a database from before M4:** training starts at the first `once`/`run` (a `note:` says

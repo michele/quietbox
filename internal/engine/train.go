@@ -124,6 +124,7 @@ const (
 	notReturn       returnVerdict = iota // ordinary INBOX mail: classify it
 	returnExplained                      // back in INBOX, but not a training event; never classify
 	returnTrained                        // the user dragged it back: sender stays in INBOX
+	knownNotReturn                       // a known key that is not a return: leave it in INBOX, untrained
 )
 
 // inboxArrival decides whether an INBOX arrival is a message coming back from
@@ -131,16 +132,27 @@ const (
 // a return needs a stored date that the arrival's INTERNALDATE is not after:
 // the messages row when there is one, else the time of our own move. An
 // arrival with no INTERNALDATE is never a return (fail safe).
+//
+// A known key (a messages row, or a done, not-undone move of ours) that is not
+// a return is knownNotReturn: a later copy of the message, or a drag back on a
+// server that stamps a new INTERNALDATE on a move. It is left in INBOX, never
+// classified or trained: quietbox never moves out a message you may have put
+// there by hand.
 func inboxArrival(a arrival, inbox string, known map[string]store.MessageRow, own *ownMoves, me map[string]bool) (returnVerdict, trainEvent) {
+	row, isKnown := known[a.Key]
+	movedAt, isMoved := own.movedAt(a.Key)
 	isReturn := false
-	if a.H.InternalDate.IsZero() {
-		isReturn = false
-	} else if row, ok := known[a.Key]; ok {
+	switch {
+	case a.H.InternalDate.IsZero():
+	case isKnown:
 		isReturn = !a.H.InternalDate.After(row.InternalDate)
-	} else if at, ok := own.movedAt(a.Key); ok {
-		isReturn = !a.H.InternalDate.After(at)
+	case isMoved:
+		isReturn = !a.H.InternalDate.After(movedAt)
 	}
 	if !isReturn {
+		if isKnown || isMoved {
+			return knownNotReturn, trainEvent{}
+		}
 		return notReturn, trainEvent{}
 	}
 	if own.explains(a) {

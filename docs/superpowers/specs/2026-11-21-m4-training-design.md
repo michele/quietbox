@@ -74,23 +74,34 @@ folders**, INBOX. Typed folders come before INBOX classification.
    databases without `messages` rows), and whose arrival the log does not explain, is a
    **return event**: sender -> INBOX. A move keeps INTERNALDATE, a fresh delivery does not, so a
    second copy of a known message (same Message-ID, delivered later, e.g. a list cross-post) is
-   never a return and never pins the sender. What happens to it then (as built): a copy of a
-   message quietbox already **filed** has that key in the audit log, so M3's "already moved"
-   guard leaves it alone in INBOX (it is neither classified nor moved); a copy of a message that
-   `init` saw in a typed folder but quietbox never moved is classified like any new mail.
+   never a return and never pins the sender. **Known but not a return** (as built, ruled in the
+   final review): an INBOX arrival whose key is in `messages` or has a `done`, not-undone `move`
+   row, but which is not a return, is **left in INBOX**: not classified, not moved, not trained,
+   counted as skipped, and its `messages` row stays as it is. This covers a later copy (same
+   Message-ID) of any message quietbox has seen in a typed folder, whether quietbox filed it or
+   `init` saw it there, and a drag back on a server (or client) that stamps a new INTERNALDATE on
+   a move: such a drag back is not learned, but the message is never moved out of INBOX again.
    Return events are handled before the `skip_seen`
    / `skip_flagged` checks, because a dragged-back message is usually already read. The message
    is never classified or moved. All other INBOX mail is classified as in M3.
 3. **Apply.** File and return events update `k.Senders` in memory (so step 2's classification
    uses them) and are persisted by a real run. A sender with a trained route is no longer
    `mixed`. If one pass holds conflicting events for the same sender, the later one in processing
-   order wins (typed folders in config order, then INBOX, UIDs ascending) and a warning says so.
+   order wins (typed folders in config order, then INBOX, UIDs ascending) and a note (information
+   only; it never makes `once` fail) says so.
 
 **"The audit log explains it".** An arrival is quietbox's own if an audit row (`move` or
 `undo_move`, status `done`) has this folder and `dest_uidvalidity`/`dest_uid` equal to the
 arrival's. Matching on the destination UID, not the key, means a message the user drags back and
 forth between folders is still seen as a user move. For rows without a destination (reconciled
 `planned` rows), fall back to key plus folder. Moves made by `undo` are explained the same way.
+A `move` or `undo_move` row whose outcome is `planned` or `failed` may still have happened (a
+crash, or a connection dropped after the server carried out the MOVE), so it too explains its key
+in its destination folder: a user move of that same message into that same folder is missed,
+which is far cheaper than a false trained route. Reconcile settles `planned` `undo_move` rows like
+moves (found back in place by Message-ID: done, the original move marked undone and the message
+forgotten from `messages`; otherwise failed), and a dry run reads `planned` rows of both actions
+as reconcile would.
 
 ### Classification
 

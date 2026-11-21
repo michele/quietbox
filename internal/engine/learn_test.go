@@ -74,10 +74,12 @@ func miniMailbox() *mailtest.Fake {
 				{InternalDate: daysAgo(4), MessageID: "<nofrom>"},
 			},
 			"SaneNews": {
-				hdr("w1@substack.test", 10, "<n1>"), hdr("w2@substack.test", 11, "<n2>"),
-				hdr("w3@substack.test", 12, "<n3>"), hdr("w4@substack.test", 13, "<n4>"),
+				// Message-IDs distinct from the new INBOX mail of learnedMailbox:
+				// a key seen in a typed folder is left alone when it shows up in INBOX.
+				hdr("w1@substack.test", 10, "<w1>"), hdr("w2@substack.test", 11, "<w2>"),
+				hdr("w3@substack.test", 12, "<w3>"), hdr("w4@substack.test", 13, "<w4>"),
 				hdr("eve@club.test", 20, "<e1>"), hdr("eve@club.test", 30, "<e2>"), hdr("eve@club.test", 40, "<e3>"),
-				hdr("w1@substack.test", 10, "<n1>"), // duplicate in the same folder: counts once
+				hdr("w1@substack.test", 10, "<w1>"), // duplicate in the same folder: counts once
 			},
 			"SaneBulk":      {hdr("store@big.test", 56, "<b1>"), hdr("store@big.test", 58, "<b2>"), hdr("store@big.test", 60, "<b3>")},
 			"SaneLater":     {hdr("store@big.test", 46, "<l1>"), hdr("store@big.test", 49, "<l2>")},
@@ -709,9 +711,9 @@ func TestLearnRecordsMessagesForTypedFolders(t *testing.T) {
 			t.Errorf("%s: %d messages, want %d (all: %v)", f, per[f], n, per)
 		}
 	}
-	h := hdr("w1@substack.test", 10, "<n1>")
+	h := hdr("w1@substack.test", 10, "<w1>")
 	if m, ok := msgs[mail.Key(h)]; !ok || m.Folder != "SaneNews" || !m.InternalDate.Equal(h.InternalDate) {
-		t.Errorf("row for <n1> = %+v ok=%v", m, ok)
+		t.Errorf("row for <w1> = %+v ok=%v", m, ok)
 	}
 }
 

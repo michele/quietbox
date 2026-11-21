@@ -339,10 +339,16 @@ INBOX-only history should count as a learned route is something to decide from `
   INTERNALDATE is **not after** the date stored for it (the `messages` row, or, without one, the time of
   quietbox's own move): a move keeps INTERNALDATE, a fresh delivery does not. Returns are never classified or
   moved, whatever their flags (`skip_seen` does not stop them training), and are forgotten from `messages`.
-- **Duplicate copies.** A later copy of a message quietbox has already filed (same Message-ID, delivered again,
-  e.g. a list cross-post) is not a return (newer INTERNALDATE) and is left alone in INBOX by M3's "already moved"
-  guard: it is neither filed nor does it pin the sender. A later copy of a message `init` saw in a typed folder,
-  but quietbox never moved, is classified like any new mail.
+- **Known but not a return: left in INBOX.** An INBOX arrival whose key is in `messages` (or has a `done`,
+  not-undone move of quietbox's) but is not a return is left alone: not classified, not moved, not trained,
+  counted as skipped; its `messages` row stays. So a later copy (same Message-ID, e.g. a list cross-post) of any
+  message quietbox has seen in a typed folder, filed by quietbox or seen there by `init`, stays in INBOX
+  unclassified. On a server (or client) that does not preserve INTERNALDATE on a move, a drag back to INBOX is
+  not learned, but the message is never moved out of INBOX again.
+- **Moves whose outcome was not recorded.** A `move` or `undo_move` row left `planned` or `failed` (a crash, or a
+  connection dropped after the server moved) explains its key in its destination folder, so it never trains;
+  a user move of that same message into that same folder is missed instead. Reconcile settles `planned`
+  `undo_move` rows like moves (found: done, original move undone, message forgotten; else failed).
 - **Last move wins.** Events in one pass apply in processing order (typed folders in config order, then INBOX,
   UIDs ascending); if they disagree for one sender the last wins and a note says so. An event equal to the
   sender's current trained route writes nothing. A trained sender is no longer `mixed`. Domain defaults are
