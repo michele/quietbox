@@ -185,16 +185,16 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 	inbox := learnParams(cfg).InboxFolder
 
 	var newObs []store.Obs
+	var msgRows []store.MessageRow // messages in typed folders, remembered for training
 	scanned := map[string]int{}
 	for _, cf := range cfg.Folders {
 		if !inScope(cf.Name) || !onServer[cf.Name] || cf.Name == sentName {
 			continue
 		}
-		if cf.Name == inbox {
-			if err := recordCursor(cf.Name); err != nil {
-				return nil, err
-			}
+		if err := recordCursor(cf.Name); err != nil { // every scanned folder but Sent
+			return nil, err
 		}
+		typed := cf.Name != inbox // INBOX and Sent are not typed folders
 		freshInbox := o.Fresh && cf.Name == inbox
 		if freshInbox && o.Backlog == 0 {
 			continue // nothing to learn from INBOX and no backlog to find
@@ -214,6 +214,9 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 					continue // same message twice in one folder counts once
 				}
 				seen[k] = struct{}{}
+				if typed {
+					msgRows = append(msgRows, store.MessageRow{Key: k, Folder: cf.Name, InternalDate: h.InternalDate})
+				}
 				if freshInbox { // the backlog window: counted, never learned from
 					if backlogMinUID == 0 || h.UID < backlogMinUID {
 						backlogMinUID = h.UID
@@ -349,6 +352,9 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 			scope = []string{o.Folder}
 		}
 		if err := tx.ReplaceObservations(scope, newObs); err != nil {
+			return err
+		}
+		if err := tx.ReplaceMessages(scope, msgRows); err != nil {
 			return err
 		}
 		if !scoped {

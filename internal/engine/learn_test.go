@@ -489,9 +489,6 @@ func TestLearnRecordsCursorsBeforeScan(t *testing.T) {
 	if !ok || sc.NextUID != sentBefore.UIDNext {
 		t.Errorf("Sent cursor = %+v ok=%v, want next %d", sc, ok, sentBefore.UIDNext)
 	}
-	if _, ok, _ := st.Cursor(context.Background(), "SaneNews"); ok {
-		t.Error("only INBOX and Sent get cursors in M3")
-	}
 }
 
 func TestLearnDryRunWritesNoCursor(t *testing.T) {
@@ -653,5 +650,114 @@ func TestLearnBacklogRequiresFreshAndFreshRefusesFolderScope(t *testing.T) {
 	_, err = Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, Fresh: true, Folder: "SaneNews"})
 	if err == nil || !strings.Contains(err.Error(), "fresh") {
 		t.Errorf("fresh with --folder: %v", err)
+	}
+}
+
+func TestLearnRecordsTypedFolderCursors(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := miniMailbox()
+	ctx := context.Background()
+	before := map[string]mail.FolderStatus{}
+	for _, f := range []string{"SaneLater", "SaneNews", "SaneBulk", "SaneBlackHole"} {
+		fs, err := fake.FolderStatus(ctx, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[f] = fs
+	}
+	late := map[string]uint32{}
+	fake.OnFetch = func(folder string) { // mail arriving while the scan runs
+		if _, typed := before[folder]; typed && late[folder] == 0 {
+			late[folder] = fake.Append(folder, hdr("late@x.test", 0, "<late-"+folder+">"))
+		}
+	}
+	st := openStore(t)
+	if _, err := Learn(ctx, cfg, fake, st, LearnOptions{Now: learnNow, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	for f, fs := range before {
+		c, ok, err := st.Cursor(ctx, f)
+		if err != nil || !ok || c.UIDValidity != fs.UIDValidity || c.NextUID != fs.UIDNext {
+			t.Fatalf("%s cursor = %+v ok=%v err=%v, want next %d", f, c, ok, err, fs.UIDNext)
+		}
+		if late[f] == 0 || late[f] < c.NextUID {
+			t.Errorf("%s: late message uid %d is not above the cursor %d", f, late[f], c.NextUID)
+		}
+	}
+}
+
+func TestLearnRecordsMessagesForTypedFolders(t *testing.T) {
+	cfg := learnConfig(t, "")
+	st := openStore(t)
+	if _, err := Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.Messages(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	per := map[string]int{}
+	for _, m := range msgs {
+		per[m.Folder]++
+	}
+	want := map[string]int{"SaneLater": 2, "SaneNews": 7, "SaneBulk": 3, "SaneBlackHole": 1}
+	if len(per) != len(want) {
+		t.Fatalf("messages per folder = %v, want %v", per, want)
+	}
+	for f, n := range want {
+		if per[f] != n {
+			t.Errorf("%s: %d messages, want %d (all: %v)", f, per[f], n, per)
+		}
+	}
+	h := hdr("w1@substack.test", 10, "<n1>")
+	if m, ok := msgs[mail.Key(h)]; !ok || m.Folder != "SaneNews" || !m.InternalDate.Equal(h.InternalDate) {
+		t.Errorf("row for <n1> = %+v ok=%v", m, ok)
+	}
+}
+
+func TestLearnScopedFolderReplacesOnlyThatFoldersMessages(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := miniMailbox()
+	ctx := context.Background()
+	st := openStore(t)
+	if _, err := Learn(ctx, cfg, fake, st, LearnOptions{Now: learnNow, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	cursorBefore, _, _ := st.Cursor(ctx, "SaneNews")
+	fake.Append("SaneNews", hdr("new@substack.test", 1, "<n-new>"))
+	fake.Append("SaneBulk", hdr("new@big.test", 1, "<b-new>"))
+	if _, err := Learn(ctx, cfg, fake, st, LearnOptions{Now: learnNow, Folder: "SaneNews"}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.Messages(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	per := map[string]int{}
+	for _, m := range msgs {
+		per[m.Folder]++
+	}
+	if per["SaneNews"] != 8 || per["SaneBulk"] != 3 || per["SaneLater"] != 2 || per["SaneBlackHole"] != 1 {
+		t.Errorf("per folder = %v, want SaneNews replaced (8), others untouched", per)
+	}
+	if _, ok := msgs[mail.Key(hdr("", 1, "<b-new>"))]; ok {
+		t.Error("scoped run to SaneNews picked up a SaneBulk message")
+	}
+	if got, _, _ := st.Cursor(ctx, "SaneNews"); got != cursorBefore {
+		t.Errorf("scoped run moved the cursor: %+v -> %+v", cursorBefore, got)
+	}
+}
+
+func TestLearnDryRunWritesNoMessages(t *testing.T) {
+	cfg := learnConfig(t, "")
+	st := openStore(t)
+	if _, err := Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, _ := st.Messages(context.Background()); len(msgs) != 0 {
+		t.Errorf("dry run stored %d messages", len(msgs))
+	}
+	if _, ok, _ := st.Cursor(context.Background(), "SaneNews"); ok {
+		t.Error("dry run stored a typed-folder cursor")
 	}
 }
