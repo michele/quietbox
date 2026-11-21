@@ -58,7 +58,9 @@ func newOwnMoves(rows []store.AuditRow) *ownMoves {
 		}
 		if r.DestUID != 0 {
 			o.dests[destKey{r.ToFolder, r.DestUIDValidity, r.DestUID}] = true
-		} else {
+		} else if !r.Undone {
+			// An undone row no longer says where the message is, and without a
+			// destination UID it would hide a later user move of the same key.
 			o.keyFolder[keyFolder{r.MessageKey, r.ToFolder}] = true
 		}
 		if r.Action == store.ActionMove && !r.Undone {
@@ -104,14 +106,17 @@ const (
 
 // inboxArrival decides whether an INBOX arrival is a message coming back from
 // a typed folder. A move keeps INTERNALDATE and a fresh delivery does not, so
-// a return needs a stored date (from known, else from our own move) that the
-// arrival's INTERNALDATE is not after.
+// a return needs a stored date that the arrival's INTERNALDATE is not after:
+// the messages row when there is one, else the time of our own move. An
+// arrival with no INTERNALDATE is never a return (fail safe).
 func inboxArrival(a arrival, inbox string, known map[string]store.MessageRow, own *ownMoves, me map[string]bool) (returnVerdict, trainEvent) {
 	isReturn := false
-	if row, ok := known[a.Key]; ok && !a.H.InternalDate.After(row.InternalDate) {
-		isReturn = true
-	} else if at, ok := own.movedAt(a.Key); ok && !a.H.InternalDate.After(at) {
-		isReturn = true
+	if a.H.InternalDate.IsZero() {
+		isReturn = false
+	} else if row, ok := known[a.Key]; ok {
+		isReturn = !a.H.InternalDate.After(row.InternalDate)
+	} else if at, ok := own.movedAt(a.Key); ok {
+		isReturn = !a.H.InternalDate.After(at)
 	}
 	if !isReturn {
 		return notReturn, trainEvent{}

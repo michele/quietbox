@@ -61,6 +61,11 @@ func TestOwnMovesExplains(t *testing.T) {
 		{"DestUID 0, folder matches but other key", []store.AuditRow{with(ourMove, func(r *store.AuditRow) {
 			r.DestUIDValidity, r.DestUID, r.MessageKey = 0, 0, "m:<other@x>"
 		})}, trainArrival("SaneNews", 100, 9, "a@x.com", trainT0), false},
+		{"undone DestUID 0 row does not explain a later arrival of the key", []store.AuditRow{with(ourMove, func(r *store.AuditRow) {
+			r.DestUIDValidity, r.DestUID, r.Undone = 0, 0, true
+		})}, trainArrival("SaneNews", 100, 9, "a@x.com", trainT0), false},
+		{"undone row with a dest UID still explains its own arrival", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Undone = true })},
+			trainArrival("SaneNews", 100, 7, "a@x.com", trainT0), true},
 		{"no rows", nil, trainArrival("SaneNews", 100, 7, "a@x.com", trainT0), false},
 	}
 	for _, tt := range tests {
@@ -152,8 +157,15 @@ func TestInboxArrival(t *testing.T) {
 			knownRow, nil, returnTrained, trained},
 		{"known key, later internal date (fresh duplicate)", trainArrival(inbox, 1, 50, "news@shop.com", trainT2),
 			knownRow, nil, notReturn, trainEvent{}},
-		{"known key, zero internal dates compare equal", trainArrival(inbox, 1, 50, "news@shop.com", time.Time{}),
-			map[string]store.MessageRow{key: {Key: key, Folder: "SaneNews"}}, nil, returnTrained, trained},
+		{"known key, zero internal dates are never a return", trainArrival(inbox, 1, 50, "news@shop.com", time.Time{}),
+			map[string]store.MessageRow{key: {Key: key, Folder: "SaneNews"}}, nil, notReturn, trainEvent{}},
+		{"known key, zero arrival date is never a return", trainArrival(inbox, 1, 50, "news@shop.com", time.Time{}),
+			knownRow, nil, notReturn, trainEvent{}},
+		{"audit row only, zero arrival date is never a return", trainArrival(inbox, 1, 50, "news@shop.com", time.Time{}),
+			nil, []store.AuditRow{moveRow}, notReturn, trainEvent{}},
+		{"known row says not a return, audit fallback not consulted",
+			trainArrival(inbox, 1, 50, "news@shop.com", trainT0.Add(12*time.Hour)), // T0 < date < T1
+			knownRow, []store.AuditRow{moveRow}, notReturn, trainEvent{}},
 		{"known via audit row only, internal date before move time", trainArrival(inbox, 1, 50, "news@shop.com", trainT0),
 			nil, []store.AuditRow{moveRow}, returnTrained, trained},
 		{"known via audit row only, internal date equal to move time", trainArrival(inbox, 1, 50, "news@shop.com", trainT1),
