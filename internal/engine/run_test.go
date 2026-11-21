@@ -159,13 +159,15 @@ func TestRunFatalWithoutInit(t *testing.T) {
 
 func TestRunFatalWhenLocked(t *testing.T) {
 	fake, st, cfg := processBox(t)
-	release, err := AcquireLock(LockPath(cfg))
+	// Another run holds the daemon lock. (A held pass lock is waited for, not
+	// refused: see TestRunWaitsForPassLockHeldByAnotherProcess.)
+	release, err := AcquireDaemonLock(DaemonLockPath(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
 	err = Run(bg, cfg, st, RunOptions{Connect: func(context.Context) (mail.Backend, error) { return fake, nil }, Backoff: fastBackoff})
-	if err == nil || !strings.Contains(err.Error(), "another quietbox") {
+	if err == nil || !strings.Contains(err.Error(), "another quietbox run is already running") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -256,4 +258,227 @@ func (c *countingFetch) FetchFrom(ctx context.Context, folder string, from uint3
 		c.n.Add(1)
 	}
 	return c.Fake.FetchFrom(ctx, folder, from, fn)
+}
+
+// idleHook calls onIdle each time the run loop enters WaitForChange, before the
+// wait starts, so a test can look at the world at that exact moment.
+type idleHook struct {
+	*mailtest.Fake
+	idles  atomic.Int32
+	onIdle func()
+}
+
+func (h *idleHook) WaitForChange(ctx context.Context, folder string) error {
+	if h.onIdle != nil {
+		h.onIdle()
+	}
+	h.idles.Add(1)
+	return h.Fake.WaitForChange(ctx, folder)
+}
+
+// progressLog collects progress lines from the run goroutine.
+type progressLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (p *progressLog) add(s string) { p.mu.Lock(); p.lines = append(p.lines, s); p.mu.Unlock() }
+
+func (p *progressLog) count(sub string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, l := range p.lines {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+// lockFree reports whether path's flock can be taken right now (and drops it again).
+func lockFree(path string) bool {
+	release, err := AcquireLock(path)
+	if err != nil {
+		return false
+	}
+	release()
+	return true
+}
+
+func TestRunHoldsNoPassLockWhileIdle(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	h := &idleHook{Fake: fake} // Wake is nil: the wait lasts until cancel
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect: func(context.Context) (mail.Backend, error) { return h, nil },
+		Backoff: fastBackoff,
+	})
+	waitFor(t, "the run to go idle after its first pass", func() bool { return h.idles.Load() == 1 })
+	if fake.MoveCount() != 7 {
+		t.Fatalf("moves = %d, want 7 before idling", fake.MoveCount())
+	}
+	release, err := AcquireLock(LockPath(cfg))
+	if err != nil {
+		t.Fatalf("pass lock while run idles: %v", err)
+	}
+	release()
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunHoldsDaemonLockForLife(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	h := &idleHook{Fake: fake}
+	connect := func(context.Context) (mail.Backend, error) { return h, nil }
+	stop := startRun(t, cfg, st, RunOptions{Connect: connect, Backoff: fastBackoff})
+	waitFor(t, "the first run to go idle", func() bool { return h.idles.Load() == 1 })
+
+	err := Run(bg, cfg, st, RunOptions{Connect: connect, Backoff: fastBackoff})
+	if err == nil || !strings.Contains(err.Error(), "another quietbox run is already running") {
+		t.Fatalf("second Run = %v, want the daemon-lock refusal", err)
+	}
+	if h.idles.Load() != 1 {
+		t.Errorf("the refused Run reached the wait")
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first run is gone: a new one starts and goes idle.
+	stop2 := startRun(t, cfg, st, RunOptions{Connect: connect, Backoff: fastBackoff})
+	waitFor(t, "a new run after the first stopped", func() bool { return h.idles.Load() == 2 })
+	if err := stop2(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWaitsForPassLockHeldByAnotherProcess(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	h := &idleHook{Fake: fake}
+	release, err := AcquireLock(LockPath(cfg)) // another fd: flock treats it like another process
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log progressLog
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect:  func(context.Context) (mail.Backend, error) { return h, nil },
+		Backoff:  fastBackoff,
+		Progress: log.add,
+	})
+	waitFor(t, "the waiting notice", func() bool { return log.count("waiting for another quietbox") > 0 })
+	if fake.MoveCount() != 0 || h.idles.Load() != 0 {
+		t.Fatalf("a pass ran while the pass lock was held: moves=%d idles=%d", fake.MoveCount(), h.idles.Load())
+	}
+	release()
+	waitFor(t, "the pass after the lock was released", func() bool { return fake.MoveCount() == 7 && h.idles.Load() == 1 })
+	if n := log.count("waiting for another quietbox"); n != 1 {
+		t.Errorf("waiting notice said %d times, want once", n)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunCancelWhileWaitingForPassLock(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	release, err := AcquireLock(LockPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var connects atomic.Int32
+	var log progressLog
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect:  func(context.Context) (mail.Backend, error) { connects.Add(1); return fake, nil },
+		Backoff:  fastBackoff,
+		Progress: log.add,
+	})
+	waitFor(t, "run to wait for the pass lock", func() bool { return log.count("waiting for another quietbox") > 0 })
+	start := time.Now()
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v, want nil on cancel", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("cancel took %s", d)
+	}
+	if fake.MoveCount() != 0 {
+		t.Errorf("moves = %d, want 0", fake.MoveCount())
+	}
+	if !lockFree(DaemonLockPath(cfg)) {
+		t.Error("daemon lock still held after Run returned")
+	}
+	release()
+	if !lockFree(LockPath(cfg)) {
+		t.Error("Run left the pass lock held")
+	}
+}
+
+func TestRunReleasesPassLockBeforeIdle(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	fake.Wake = make(chan struct{}, 1)
+	var checked, held atomic.Int32
+	h := &idleHook{Fake: fake}
+	h.onIdle = func() {
+		checked.Add(1)
+		if !lockFree(LockPath(cfg)) {
+			held.Add(1)
+		}
+		if lockFree(DaemonLockPath(cfg)) {
+			t.Error("daemon lock not held while run idles")
+		}
+	}
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect: func(context.Context) (mail.Backend, error) { return h, nil },
+		Backoff: fastBackoff,
+	})
+	waitFor(t, "the first wait", func() bool { return checked.Load() == 1 })
+	fake.Append("INBOX", newMail("late@substack.test", 0, "<late>", nil))
+	fake.Wake <- struct{}{}
+	waitFor(t, "the second wait", func() bool { return checked.Load() == 2 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if n := held.Load(); n != 0 {
+		t.Errorf("pass lock held at %d of 2 WaitForChange calls", n)
+	}
+}
+
+func TestRunReleasesLocksOnProcessError(t *testing.T) {
+	t.Run("transient error before the backoff", func(t *testing.T) {
+		fake, st, cfg := processBox(t)
+		f := &flaky{Fake: fake}
+		f.failing.Store(true)
+		var backoffs, held atomic.Int32
+		stop := startRun(t, cfg, st, RunOptions{
+			Connect: func(context.Context) (mail.Backend, error) { return f, nil },
+			Backoff: func(int) time.Duration {
+				if !lockFree(LockPath(cfg)) {
+					held.Add(1)
+				}
+				backoffs.Add(1)
+				return time.Millisecond
+			},
+		})
+		waitFor(t, "two failed passes", func() bool { return backoffs.Load() >= 2 })
+		if err := stop(); err != nil {
+			t.Fatal(err)
+		}
+		if n := held.Load(); n != 0 {
+			t.Errorf("pass lock held during %d backoff(s)", n)
+		}
+		if !lockFree(LockPath(cfg)) || !lockFree(DaemonLockPath(cfg)) {
+			t.Error("a lock is still held after Run returned")
+		}
+	})
+	t.Run("refusal", func(t *testing.T) {
+		fake, st, cfg := processBox(t)
+		fake.Caps = mail.Capabilities{"IMAP4REV1"}
+		err := Run(bg, cfg, st, RunOptions{Connect: func(context.Context) (mail.Backend, error) { return fake, nil }, Backoff: fastBackoff})
+		if err == nil || !strings.Contains(err.Error(), "MOVE") {
+			t.Fatalf("err = %v", err)
+		}
+		if !lockFree(LockPath(cfg)) || !lockFree(DaemonLockPath(cfg)) {
+			t.Error("a lock is still held after Run refused")
+		}
+	})
 }
