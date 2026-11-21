@@ -1,6 +1,6 @@
 # M4: Training via folder moves: design
 
-Status: draft for approval. Builds on M3 (`once`/`run`/`undo`), see `docs/PLAN.md`.
+Status: implemented (see `docs/PLAN.md`, M4). Builds on M3 (`once`/`run`/`undo`), see `docs/PLAN.md`.
 
 ## Intent
 
@@ -73,8 +73,12 @@ folders**, INBOX. Typed folders come before INBOX classification.
    `done`, not-undone `move` audit row made at or after the message's INTERNALDATE (fallback for
    databases without `messages` rows), and whose arrival the log does not explain, is a
    **return event**: sender -> INBOX. A move keeps INTERNALDATE, a fresh delivery does not, so a
-   second copy of an already-filed message (same Message-ID, delivered later, e.g. a list
-   cross-post) is ordinary new mail and never pins the sender. Return events are handled before the `skip_seen`
+   second copy of a known message (same Message-ID, delivered later, e.g. a list cross-post) is
+   never a return and never pins the sender. What happens to it then (as built): a copy of a
+   message quietbox already **filed** has that key in the audit log, so M3's "already moved"
+   guard leaves it alone in INBOX (it is neither classified nor moved); a copy of a message that
+   `init` saw in a typed folder but quietbox never moved is classified like any new mail.
+   Return events are handled before the `skip_seen`
    / `skip_flagged` checks, because a dragged-back message is usually already read. The message
    is never classified or moved. All other INBOX mail is classified as in M3.
 3. **Apply.** File and return events update `k.Senders` in memory (so step 2's classification
