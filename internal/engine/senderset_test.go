@@ -97,3 +97,22 @@ func TestUnsetSenderRouteOnlyTrained(t *testing.T) {
 		t.Fatal("learned row was removed")
 	}
 }
+
+func TestCheckSenderRoute(t *testing.T) {
+	cfg := learnConfig(t, "")
+	if addr, err := CheckSenderRoute(cfg, " A@X.com ", "SaneLater"); err != nil || addr != "a@x.com" {
+		t.Errorf("valid: %q, %v", addr, err)
+	}
+	for _, bad := range []string{"", "   ", "nobody", "x.com"} {
+		if _, err := CheckSenderRoute(cfg, bad, "SaneLater"); err == nil || !strings.Contains(err.Error(), "address") {
+			t.Errorf("address %q: err = %v, want an address error", bad, err)
+		}
+	}
+	if _, err := CheckSenderRoute(cfg, "a@x.com", "Nope"); err == nil || !strings.Contains(err.Error(), "SaneLater") {
+		t.Errorf("bad folder: err = %v", err)
+	}
+	st := setTestStore(t)
+	if err := SetSenderRoute(context.Background(), cfg, st, "nobody", "SaneLater", learnNow); err == nil {
+		t.Error("SetSenderRoute accepted an address without @")
+	}
+}

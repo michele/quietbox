@@ -362,7 +362,8 @@ INBOX-only history should count as a learned route is something to decide from `
   `init`/`learn` is re-run only messages quietbox filed itself (found through the audit log) are recognised when
   you move them back to INBOX; messages you filed by hand before are not.
 - **`senders set <addr> <folder>` / `senders unset <addr>`.** `set` writes a trained row (reason "set by hand") and
-  a `manual` training row; the folder must be a configured folder (INBOX allowed, Sent not). `unset` deletes a
+  a `manual` training row; the folder must be a configured folder (INBOX allowed, Sent not) and the address must
+  contain `@`, both checked before waiting for the lock. `unset` deletes a
   trained row only; a learned route the training had replaced comes back at the next `init`/`learn`, not before.
   Both work on the database (no IMAP login) and **wait for the instance lock** ("waiting for another quietbox..."
   after a second, Ctrl-C stops waiting) instead of failing. Because `run` holds the lock for its whole lifetime,

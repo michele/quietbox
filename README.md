@@ -238,7 +238,8 @@ quietbox senders set alice@friends.test INBOX    # always keep this sender in IN
 quietbox senders unset promo@deals.test          # remove the trained route
 ```
 
-- The folder must be one of your configured folders (or INBOX). Addresses are matched lower-case.
+- The folder must be one of your configured folders (or INBOX), and the address must contain `@`;
+  both are checked before waiting for the lock, so a typo fails at once. Addresses are matched lower-case.
 - `unset` removes only a trained route. If the sender had a learned route before you trained it, that
   route comes back at the next `init`/`learn`, not immediately: until then the sender has no route.
 - Both work on the database only (no IMAP login) and take the instance lock, **waiting** for it

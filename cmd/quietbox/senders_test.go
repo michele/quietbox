@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -81,4 +83,40 @@ func TestSendersSetWaitsForTheLock(t *testing.T) {
 	if strings.Count(out, "waiting for another quietbox...") != 1 || !strings.Contains(out, "a@b.com -> SaneLater (trained)") {
 		t.Fatalf("output:\n%s", out)
 	}
+}
+
+// A typo is rejected at once, not after waiting for `run` to stop.
+func TestSendersSetValidatesBeforeWaitingForTheLock(t *testing.T) {
+	cfgPath := sendersEnv(t)
+	cfg, err := config.LoadOffline(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := engine.AcquireLock(engine.LockPath(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held()
+	for _, args := range [][]string{{"x@y.test", "BadFolder"}, {"nobody", "SaneLater"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		start := time.Now()
+		out, err := execRootCtx(t, ctx, append([]string{"senders", "set"}, append(args, "--config", cfgPath)...)...)
+		cancel()
+		if err == nil || errors.Is(err, context.DeadlineExceeded) || strings.Contains(out, "waiting") || time.Since(start) > 900*time.Millisecond {
+			t.Errorf("set %v: err = %v after %v\n%s", args, err, time.Since(start), out)
+		}
+	}
+}
+
+// execRootCtx is execRoot with a context, so a command that would wait forever
+// gives up when ctx is done.
+func execRootCtx(t *testing.T, ctx context.Context, args ...string) (string, error) {
+	t.Helper()
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(args)
+	err := root.ExecuteContext(ctx)
+	return out.String(), err
 }
