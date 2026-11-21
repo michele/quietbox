@@ -107,21 +107,24 @@ right 1 time in 4 and hid INBOX mail, so it is off by default.
 
 A learned sender route is checked before the thread rule, so a reply from a sender you have
 filed away stays filed; `quietbox eval` counts the cost of that as "hidden important".
-Every decision records its **rule**, **reason** and the detector **signals** behind it
-(`quietbox explain <message>` arrives in M4).
+Every decision records its **rule**, **reason** and the detector **signals** behind it;
+`quietbox explain <message>` (M4) shows them for one message.
 
 ## Ongoing training
 
-Same as SaneBox: moving a message *into* a configured folder re-routes that sender there.
+Same as SaneBox: moving a message *into* a configured folder re-routes that sender there, and
+moving one *back to INBOX* keeps that sender in INBOX. One move is enough and the last move wins.
 User moves always override learned routes and detectors.
-IMAP doesn't report moves, so on each sync quietbox compares folder contents with its
-last snapshot. A message that changed folder **and that quietbox didn't move itself**
-(check the audit log) counts as a user move.
+IMAP doesn't report moves, and quietbox does not diff folder snapshots: every typed folder has a
+cursor like INBOX, and each pass reads only what **arrived** since. An arrival that quietbox did
+not put there itself (the audit log says where its own moves landed) is a move by you. Details in
+M4 below.
 
 ## State (SQLite)
 
 - `folders(name, type, present, last_scanned_at)` (`present`: `exists` is an SQL keyword)
-- `senders(address, domain, route_folder, route_source[learned|trained|detected], mixed, sent_to_count, updated_at)`
+- `senders(address, domain, route_folder, route_source[learned|trained|detected], mixed, sent_to_count, updated_at, reason)`:
+  a `trained` row (M4) is never replaced by `init`/`learn`; its reason says what trained it
 - `observations(address, folder, internal_date)`: one row per message seen, no keys, subjects or bodies.
   Recency weighting needs per-message dates, and re-learning one folder replaces just that folder's rows.
   `sender_folder_counts` is a view over it.
@@ -129,10 +132,16 @@ last snapshot. A message that changed folder **and that quietbox didn't move its
 - `sent_message_ids(message_id, sent_at)`: Message-IDs of mail in Sent (schema v2), so a reply to
   your own mail is recognised as "in the thread". IDs only, never subjects.
 - `domains(domain, default_folder, senders, agreeing)`
-- `messages(key, folder, first_seen, last_seen)`: snapshot used to detect user moves
+- `messages(key, folder, internal_date)` (schema v5): where a message was last seen in a typed folder, so a
+  move back to INBOX is recognised. Filled by the `init`/`learn` scan of typed folders, by quietbox's own moves and
+  by typed-folder arrivals; a row is deleted when the message returns to INBOX or `undo` restores it. Keys and
+  folders only.
+- `training(id, at, sender, folder, source[move|manual], message_key)` (schema v5): one row per training event,
+  newest shown by `explain`. `folder` is the new route (the INBOX name means "stays in INBOX").
 - `decisions(message_key, folder, reason, at)`
 - `audit(id, action, message_key, from_folder, to_folder, reason, at, undone, status, dest_uidvalidity, dest_uid)`: `action` is `create_folder`, `move` or `undo_move`; `status` is `planned|done|failed`
-- `cursors(folder, uidvalidity, next_uid)`: where `once`/`run` resume (INBOX and Sent; schema v3)
+- `cursors(folder, uidvalidity, next_uid, backlog_below)`: where `once`/`run` resume (INBOX and Sent from schema v3;
+  every typed folder too from M4)
 
 Message key: OBJECTID `EMAILID` → `Message-ID` header → hash(From, Date, Subject).
 
@@ -241,7 +250,7 @@ INBOX-only history should count as a learned route is something to decide from `
 - **New mail only.** `init` records a cursor per folder for INBOX and Sent: `(UIDVALIDITY, next UID)`, taking
   UIDNEXT *before* the scan so mail arriving during `init` is not lost. `once`/`run` fetch only `UID >= cursor`.
   If UIDVALIDITY changed, nothing moves from that folder: the cursor is reset and the user is told to re-run `init`.
-  Typed folders get no cursors until M4. Both commands refuse to run before `init`.
+  (Typed folders got cursors in M4, see there.) Both commands refuse to run before `init`.
 - **One pass (`engine.Process`)**, shared by `once` and `run`: lock file (`<state path>.lock`, flock, Unix only;
   `--dry-run` takes none) -> require `MOVE` + `UIDPLUS` -> settle `planned` audit rows left by a crash (found in
   the destination by Message-ID -> `done`, else `failed`) -> check UIDVALIDITY -> Sent (new recipients and
@@ -312,8 +321,59 @@ INBOX-only history should count as a learned route is something to decide from `
   integration tests (file, command, wrong password never echoed, `run` recovering after the file is corrected).
   Not verified: a real keychain/`pass`/systemd credential setup.
 
-### M4: Training via folder moves
-- snapshot diff, user-move detection, `quietbox explain`, `quietbox senders set <addr> <folder>`
+### M4: Training via folder moves: implemented
+- Design: `docs/superpowers/specs/2026-11-21-m4-training-design.md`; plan: `docs/superpowers/plans/2026-11-21-m4-training.md`.
+- **Arrivals only.** No snapshot diff and no departures: `init` gives every configured typed folder a cursor
+  (UIDNEXT read before the scan, as for INBOX), and each pass fetches only `UID >= cursor`. Pass order: lock, MOVE
+  check, reconcile, Sent, **typed folders** (config order), INBOX. Training runs before INBOX classification, so
+  the mail that wakes `run` is already filed by what you just taught it.
+- **File event.** A message that arrives in a typed folder re-routes its sender there (`route_source = trained`),
+  unless quietbox put it there itself, or it is from one of your own addresses, or it has no parseable From. A
+  move between two typed folders is a file event too. A Sieve rule delivering into a typed folder trains the same
+  way (indistinguishable from a move).
+- **Own moves are matched by destination UID.** An arrival is quietbox's own when a `done` `move` or `undo_move`
+  audit row landed in that folder with the same UIDVALIDITY and UID (COPYUID). Rows without a destination UID fall
+  back to key + folder. So a message you drag back and forth is still your move, and `undo` never trains.
+- **Return event.** A message that arrives in INBOX and was last seen in a typed folder pins its sender to INBOX (a
+  trained route whose folder is INBOX, reason "sender stays in INBOX"). It counts as a return only if its
+  INTERNALDATE is **not after** the date stored for it (the `messages` row, or, without one, the time of
+  quietbox's own move): a move keeps INTERNALDATE, a fresh delivery does not. Returns are never classified or
+  moved, whatever their flags (`skip_seen` does not stop them training), and are forgotten from `messages`.
+- **Duplicate copies.** A later copy of a message quietbox has already filed (same Message-ID, delivered again,
+  e.g. a list cross-post) is not a return (newer INTERNALDATE) and is left alone in INBOX by M3's "already moved"
+  guard: it is neither filed nor does it pin the sender. A later copy of a message `init` saw in a typed folder,
+  but quietbox never moved, is classified like any new mail.
+- **Last move wins.** Events in one pass apply in processing order (typed folders in config order, then INBOX,
+  UIDs ascending); if they disagree for one sender the last wins and a note says so. An event equal to the
+  sender's current trained route writes nothing. A trained sender is no longer `mixed`. Domain defaults are
+  untouched.
+- **Notes vs warnings.** `ProcessReport.Notes` (printed `note: ...`) are information only and never make `once`
+  exit non-zero; `Warnings` still do. `once`/`run` print `trained <sender>: you moved a message ...` per event and
+  `trained N sender(s) from your moves`; `--dry-run` prints `would train` and writes nothing.
+- **Existing M3 databases.** A migration cannot know where typed folders ended. On the first M4 pass a typed folder
+  without a cursor gets one at its current UIDNEXT, with the note "training from moves starts now for ...; earlier
+  moves are not learned" (a dry run skips such folders). `messages` is empty on such a database, so until
+  `init`/`learn` is re-run only messages quietbox filed itself (found through the audit log) are recognised when
+  you move them back to INBOX; messages you filed by hand before are not.
+- **`senders set <addr> <folder>` / `senders unset <addr>`.** `set` writes a trained row (reason "set by hand") and
+  a `manual` training row; the folder must be a configured folder (INBOX allowed, Sent not). `unset` deletes a
+  trained row only; a learned route the training had replaced comes back at the next `init`/`learn`, not before.
+  Both work on the database (no IMAP login) and **wait for the instance lock** ("waiting for another quietbox..."
+  after a second, Ctrl-C stops waiting) instead of failing. Because `run` holds the lock for its whole lifetime,
+  while a daemon is up they wait until it stops: stop `run`, set, start it again.
+- **`explain [--folder F] <uid | message-id>`.** Opens the folder read-only (default INBOX), fetches that one
+  message's headers and prints what `Classify` would decide *now*: decision, rule, reason, signals, the sender's
+  route and source, its latest training event and the audit rows for the message key. Sender address, UID and
+  Message-ID only; never the subject or body. Takes no lock, writes nothing.
+- No config switch turns training off (on purpose); `senders unset` is the escape hatch.
+- **State.** Schema v5: `messages(key, folder, internal_date)`, `training(...)`, cursors for typed folders.
+- Verified against the Dovecot test server only (`make itest`: filing by hand trains, drag back keeps the sender in
+  INBOX, `undo` is not training, `senders set`/`unset` including `set` waiting while `run` is up, `explain`
+  output without the subject, `run` learning from a move on the next delivery) and a manual demo.
+- **Not verified:** real Fastmail or Gmail; hundreds of moves
+  in practice (the audit log is read whole once per pass, fine at expected sizes); `set`/`unset` contention with
+  `run` beyond the one integration test; the M3-database upgrade path on a real mailbox (unit-tested with the fake
+  backend only).
 
 ### M5: BlackHole
 - `blackhole` folder type: move a message there to block the sender
