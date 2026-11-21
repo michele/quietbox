@@ -27,3 +27,8 @@ func AcquireDaemonLock(string) (func(), error) {
 func AcquireLockTimeout(context.Context, string, time.Duration, func()) (func(), error) {
 	return nil, errors.New("quietbox can only run on Unix-like systems (it needs file locking)")
 }
+
+// AcquireLockWaitNotify is not available here either.
+func AcquireLockWaitNotify(context.Context, string, time.Duration, func(time.Duration)) (func(), error) {
+	return nil, errors.New("quietbox can only run on Unix-like systems (it needs file locking)")
+}

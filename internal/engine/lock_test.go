@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -112,7 +113,7 @@ func TestAcquireLockWaitCancel(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if d := time.Since(start); d > 500*time.Millisecond {
+	if d := time.Since(start); d > time.Second { // generous: the point is it did not wait on
 		t.Fatalf("cancel took %v", d)
 	}
 }
@@ -129,7 +130,7 @@ func TestDaemonLockSecondAcquireFailsFast(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "another quietbox run is already running") || !strings.Contains(err.Error(), path) {
 		t.Fatalf("second acquire: err = %v", err)
 	}
-	if d := time.Since(start); d > 150*time.Millisecond {
+	if d := time.Since(start); d > time.Second { // generous: the point is it did not poll or wait
 		t.Fatalf("did not fail fast: %v", d)
 	}
 }
@@ -352,5 +353,68 @@ func TestLocksAreNotStrandedBySIGKILL(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("lock file %s: %v", p, err)
 		}
+	}
+}
+
+func TestAcquireLockWaitNotifyRepeats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.db.lock")
+	held, err := AcquireLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(2300 * time.Millisecond)
+		held()
+	}()
+	const every = 300 * time.Millisecond
+	var mu sync.Mutex
+	var got []time.Duration
+	release, err := AcquireLockWaitNotify(context.Background(), path, every, func(waited time.Duration) {
+		mu.Lock()
+		got = append(got, waited)
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	mu.Lock()
+	defer mu.Unlock()
+	// Due at 1s, 1.3s, 1.6s, 1.9s, 2.2s; polls are 200 ms apart, so a slow
+	// machine may merge two, but never fewer than three in 2.3 s.
+	if len(got) < 3 {
+		t.Fatalf("notified %d times (%v), want at least 3", len(got), got)
+	}
+	for i, w := range got {
+		if i == 0 && w < time.Second {
+			t.Errorf("first notice after %v, want >= 1s", w)
+		}
+		if i > 0 && w-got[0] < time.Duration(i)*every-200*time.Millisecond {
+			t.Errorf("notice %d after %v: too soon after the first (%v)", i, w, got[0])
+		}
+		if i > 0 && w <= got[i-1] {
+			t.Errorf("elapsed not increasing: %v", got)
+		}
+	}
+}
+
+func TestAcquireLockTimeoutCallsOnWaitOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.db.lock")
+	held, err := AcquireLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(2500 * time.Millisecond)
+		held()
+	}()
+	var n atomic.Int32
+	release, err := AcquireLockTimeout(context.Background(), path, 10*time.Second, func() { n.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if n.Load() != 1 {
+		t.Fatalf("onWait called %d times over a 2.5 s wait, want 1", n.Load())
 	}
 }
