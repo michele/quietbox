@@ -6,10 +6,12 @@ package imapbackend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -143,24 +145,27 @@ func (b *Backend) ListFolders(ctx context.Context) ([]mail.Folder, error) {
 	out := make([]mail.Folder, 0, len(list))
 	for _, l := range list {
 		f := mail.Folder{Name: l.Mailbox, Delim: string(l.Delim)}
-		selectable := true
 		for _, a := range l.Attrs {
 			f.Attrs = append(f.Attrs, string(a))
-			if a == imap.MailboxAttrNoSelect {
-				selectable = false
-			}
 		}
 		switch {
-		case !selectable:
+		case isUnselectable(l.Attrs):
+			// A container such as Gmail's "[Gmail]": listed, but it holds no mail.
 		case l.Status != nil && l.Status.NumMessages != nil:
 			f.Messages = *l.Status.NumMessages
 		default:
 			st, err := b.c.Status(l.Mailbox, &imap.StatusOptions{NumMessages: true}).Wait()
-			if err != nil {
+			switch {
+			case err == nil:
+				if st.NumMessages != nil {
+					f.Messages = *st.NumMessages
+				}
+			case isServerRefusal(err):
+				// The server listed it but refuses to say how many messages it has
+				// (Gmail does this for "[Gmail]" without flagging it). One such name
+				// must not stop the whole listing; it simply has no count.
+			default:
 				return nil, fmt.Errorf("status %q: %w", l.Mailbox, err)
-			}
-			if st.NumMessages != nil {
-				f.Messages = *st.NumMessages
 			}
 		}
 		out = append(out, f)
@@ -282,4 +287,25 @@ func (b *Backend) CreateFolder(ctx context.Context, name string) error {
 	}
 	_ = b.c.Subscribe(name).Wait()
 	return nil
+}
+
+// isUnselectable reports whether LIST attributes mark a name that is only a
+// container and cannot be asked about (\Noselect, or \NonExistent which RFC 5258
+// says implies it). Attributes are case-insensitive.
+func isUnselectable(attrs []imap.MailboxAttr) bool {
+	for _, a := range attrs {
+		if strings.EqualFold(string(a), string(imap.MailboxAttrNoSelect)) ||
+			strings.EqualFold(string(a), string(imap.MailboxAttrNonExistent)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isServerRefusal reports whether err is the server answering NO to a command.
+// A refusal about one folder says something about that folder; anything else
+// (BAD, a dropped connection) is a real failure.
+func isServerRefusal(err error) bool {
+	var e *imap.Error
+	return errors.As(err, &e) && e.Type == imap.StatusResponseTypeNo
 }
