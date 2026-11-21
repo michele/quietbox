@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -151,7 +152,7 @@ func TestProcessTrainsFromUserFilingIntoTypedFolder(t *testing.T) {
 	if !ok || r.RouteSource != store.SourceTrained || r.RouteFolder != "SaneLater" || r.Mixed {
 		t.Errorf("sender row = %+v (found %v)", r, ok)
 	}
-	if r.Reason != "moved to SaneLater on 2026-06-01" {
+	if r.Reason != "you moved a message to SaneLater on 2026-06-01" {
 		t.Errorf("reason = %q", r.Reason)
 	}
 	tr := trainingOf(t, st, "stranger@x.test")
@@ -182,8 +183,11 @@ func TestProcessReturnToInboxPinsSender(t *testing.T) {
 	userMove(t, fake, "SaneNews", uid, "INBOX")
 	base := fake.MoveCount()
 	rep := runProcess(t, fake, st, cfg, false)
-	if got := trainedOf(rep, "newsletter@weekly.test"); len(got) != 1 || got[0].To != "INBOX" || got[0].Status != TrainDone {
+	if got := trainedOf(rep, "newsletter@weekly.test"); len(got) != 1 || got[0].To != "INBOX" || got[0].From != "SaneNews" || got[0].Status != TrainDone {
 		t.Fatalf("trained = %+v", rep.Trained)
+	}
+	if r, _ := senderOf(t, st, "newsletter@weekly.test"); r.Reason != "you moved a message from SaneNews to INBOX on 2026-06-01" {
+		t.Errorf("reason = %q", r.Reason)
 	}
 	if fake.MoveCount() != base || countFrom(fake, "INBOX", "newsletter@weekly.test") != 1 {
 		t.Error("the returned message was moved again")
@@ -301,7 +305,7 @@ func TestProcessDragAndBackAgain(t *testing.T) {
 	}
 	userMove(t, fake, "INBOX", inInbox, "SaneNews") // same key, new UID in SaneNews
 	rep := runProcess(t, fake, st, cfg, false)
-	want := TrainOutcome{Sender: "newsletter@weekly.test", From: "INBOX", To: "SaneNews", Source: store.TrainMove, Status: TrainDone}
+	want := TrainOutcome{Sender: "newsletter@weekly.test", From: "", Route: "INBOX", To: "SaneNews", Source: store.TrainMove, Status: TrainDone}
 	if got := trainedOf(rep, "newsletter@weekly.test"); len(got) != 1 || got[0] != want {
 		t.Fatalf("trained = %+v, want [%+v]", rep.Trained, want)
 	}
@@ -310,7 +314,7 @@ func TestProcessDragAndBackAgain(t *testing.T) {
 		t.Errorf("training = %+v", tr)
 	}
 	if r, _ := senderOf(t, st, "newsletter@weekly.test"); r.RouteFolder != "SaneNews" || r.RouteSource != store.SourceTrained ||
-		r.Reason != "moved from INBOX to SaneNews on 2026-06-01" {
+		r.Reason != "route was INBOX; you moved a message to SaneNews on 2026-06-01" {
 		t.Errorf("sender row = %+v", r)
 	}
 }
@@ -374,6 +378,16 @@ func TestProcessM3DatabaseHasNoCursors(t *testing.T) {
 			}
 
 			rep := runProcess(t, fake, st, cfg, dry)
+			if len(rep.Warnings) != 0 {
+				t.Errorf("a first M4 pass is not a fault: warnings = %v", rep.Warnings)
+			}
+			note := "training from moves starts now for SaneLater, SaneNews, SaneBulk, SaneBlackHole; earlier moves are not learned"
+			if !dry && (len(rep.Notes) != 1 || rep.Notes[0] != note) {
+				t.Errorf("notes = %q, want [%q]", rep.Notes, note)
+			}
+			if dry && len(rep.Notes) != 0 {
+				t.Errorf("dry run notes = %q", rep.Notes)
+			}
 			if len(rep.Trained) != 0 || len(trainedSenders(t, st)) != 0 {
 				t.Errorf("trained = %+v", rep.Trained)
 			}
@@ -387,9 +401,6 @@ func TestProcessM3DatabaseHasNoCursors(t *testing.T) {
 						t.Errorf("dry run created a cursor for %s", f)
 					}
 					continue
-				}
-				if !hasWarning(rep, "training from moves starts now for "+f+"; earlier moves are not learned") {
-					t.Errorf("no warning for %s: %v", f, rep.Warnings)
 				}
 				if !ok || c.NextUID != next[f].UIDNext || c.UIDValidity != next[f].UIDValidity {
 					t.Errorf("cursor %s = %+v (found %v), want UIDNEXT %d", f, c, ok, next[f].UIDNext)
@@ -405,7 +416,7 @@ func TestProcessTypedFolderUIDValidityChange(t *testing.T) {
 	fake.UIDValidity = map[string]uint32{"SaneLater": 7}
 	before, _ := fake.FolderStatus(bg, "SaneLater")
 	rep := runProcess(t, fake, st, cfg, false)
-	if !hasWarning(rep, "SaneLater was renumbered") {
+	if !hasWarning(rep, "SaneLater was renumbered by the server (UIDVALIDITY changed): nothing was learned from it; run `quietbox init` to relearn") {
 		t.Errorf("warnings = %v", rep.Warnings)
 	}
 	if len(rep.Trained) != 0 || len(trainingOf(t, st, "stranger@x.test")) != 0 {
@@ -439,8 +450,8 @@ func TestProcessConflictingEventsLastWins(t *testing.T) {
 	fake.Append("SaneLater", newMail("flip@x.test", 0, "<f1>", nil))
 	fake.Append("SaneBulk", newMail("flip@x.test", 0, "<f2>", nil)) // later in config order
 	rep := runProcess(t, fake, st, cfg, false)
-	if !hasWarning(rep, "moves for flip@x.test disagreed in one pass; the last one won") {
-		t.Errorf("warnings = %v", rep.Warnings)
+	if len(rep.Notes) != 1 || rep.Notes[0] != "moves for flip@x.test disagreed in one pass; the last one won" || len(rep.Warnings) != 0 {
+		t.Errorf("notes = %q, warnings = %q", rep.Notes, rep.Warnings)
 	}
 	if r, _ := senderOf(t, st, "flip@x.test"); r.RouteFolder != "SaneBulk" || r.RouteSource != store.SourceTrained {
 		t.Errorf("sender row = %+v", r)
@@ -450,7 +461,7 @@ func TestProcessConflictingEventsLastWins(t *testing.T) {
 		t.Errorf("training = %+v", tr)
 	}
 	got := trainedOf(rep, "flip@x.test")
-	if len(got) != 2 || got[0].To != "SaneLater" || got[1].From != "SaneLater" || got[1].To != "SaneBulk" {
+	if len(got) != 2 || got[0].To != "SaneLater" || got[1].Route != "SaneLater" || got[1].To != "SaneBulk" {
 		t.Errorf("trained = %+v", got)
 	}
 }
@@ -534,5 +545,151 @@ func TestProcessCrashedOwnMoveDoesNotTrain(t *testing.T) {
 		if len(trainedOf(rep, "crash@x.test")) != 0 {
 			t.Errorf("dry=%v: our crashed move trained: %+v", dry, rep.Trained)
 		}
+	}
+}
+
+// returnedAndPinned checks that sender was pinned to INBOX by one return of
+// key from origin: trained route, a move training row, no messages row left,
+// the message still in INBOX, and new mail from the sender stays.
+func returnedAndPinned(t *testing.T, fake *mailtest.Fake, st *store.Store, cfg func(dry bool) *ProcessReport, rep *ProcessReport, sender, key, origin string, inInbox int) {
+	t.Helper()
+	got := trainedOf(rep, sender)
+	if len(got) != 1 || got[0].To != "INBOX" || got[0].From != origin || got[0].Status != TrainDone {
+		t.Fatalf("trained = %+v", rep.Trained)
+	}
+	if r, ok := senderOf(t, st, sender); !ok || r.RouteSource != store.SourceTrained || r.RouteFolder != "INBOX" {
+		t.Errorf("sender row = %+v (found %v)", r, ok)
+	}
+	if tr := trainingOf(t, st, sender); len(tr) == 0 || tr[0].Folder != "INBOX" || tr[0].Source != store.TrainMove || tr[0].MessageKey != key {
+		t.Errorf("training = %+v", tr)
+	}
+	if msgs, _ := st.Messages(bg); func() bool { _, ok := msgs[key]; return ok }() {
+		t.Errorf("%s still has a messages row", key)
+	}
+	if countFrom(fake, "INBOX", sender) != inInbox {
+		t.Errorf("%d messages from %s in INBOX, want %d", countFrom(fake, "INBOX", sender), sender, inInbox)
+	}
+	if _, moved := moveOf(rep, sender); moved {
+		t.Error("the returned message was moved")
+	}
+	later := newMail(sender, 0, "<later-"+sender+">", func(h *mail.Header) {
+		h.ListID = "Later <x.test>"
+		sig(h, "list-unsubscribe", "<https://x.test/u>")
+	})
+	later.InternalDate = learnNow.Add(time.Hour)
+	fake.Append("INBOX", later)
+	next := cfg(false)
+	if _, moved := moveOf(next, sender); moved || countFrom(fake, "INBOX", sender) != inInbox+1 {
+		t.Errorf("new mail from a pinned sender left INBOX: %+v", next.Moves)
+	}
+}
+
+// A message init saw in a typed folder (known only from its messages row,
+// never moved by quietbox) that you drag to INBOX pins its sender.
+func TestProcessReturnOfMessageInitSaw(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	msgs, _ := st.Messages(bg)
+	if r, ok := msgs["m:<e1>"]; !ok || r.Folder != "SaneNews" || r.InternalDate.IsZero() {
+		t.Fatalf("setup: init did not remember <e1>: %+v", r)
+	}
+	if moved, _ := st.MovedKeys(bg); func() bool { _, ok := moved["m:<e1>"]; return ok }() {
+		t.Fatal("setup: <e1> has an audit move")
+	}
+	runProcess(t, fake, st, cfg, false) // file the fixture's new INBOX mail first
+	uid := userMove(t, fake, "SaneNews", uidOfID(t, fake, "SaneNews", "<e1>"), "INBOX")
+	if h := fake.Messages["INBOX"]; h[len(h)-1].UID != uid || !h[len(h)-1].InternalDate.Equal(daysAgo(20)) {
+		t.Fatal("setup: the fake's move lost INTERNALDATE")
+	}
+	base := fake.MoveCount()
+	rep := runProcess(t, fake, st, cfg, false)
+	if fake.MoveCount() != base || rep.Skipped != 1 {
+		t.Errorf("moves=%d skipped=%d", fake.MoveCount()-base, rep.Skipped)
+	}
+	returnedAndPinned(t, fake, st, func(dry bool) *ProcessReport { return runProcess(t, fake, st, cfg, dry) }, rep, "eve@club.test", "m:<e1>", "SaneNews", 1)
+}
+
+// A database without messages rows (M3, or init not re-run) still recognises
+// the return of a message quietbox filed, through the audit log's move time.
+func TestProcessReturnFoundThroughAuditLog(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	uid := filedNewsletter(t, fake, func() *ProcessReport { return runProcess(t, fake, st, cfg, false) })
+	msgs, _ := st.Messages(bg)
+	var keys []string
+	for k := range msgs {
+		keys = append(keys, k)
+	}
+	if err := st.Update(bg, func(tx *store.Tx) error { return tx.ForgetMessages(keys) }); err != nil {
+		t.Fatal(err)
+	}
+	userMove(t, fake, "SaneNews", uid, "INBOX")
+	base := fake.MoveCount()
+	rep := runProcess(t, fake, st, cfg, false)
+	if fake.MoveCount() != base || rep.Skipped != 1 {
+		t.Errorf("moves=%d skipped=%d", fake.MoveCount()-base, rep.Skipped)
+	}
+	returnedAndPinned(t, fake, st, func(dry bool) *ProcessReport { return runProcess(t, fake, st, cfg, dry) }, rep, "newsletter@weekly.test", "m:<n2>", "SaneNews", 1)
+}
+
+// A message without a Message-ID has a hash key; it trains both ways.
+func TestProcessHashKeyTrainsBothWays(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	runProcess(t, fake, st, cfg, false) // file the fixture's new INBOX mail first
+	h := mail.Header{From: "hash@x.test", Date: daysAgo(2), InternalDate: daysAgo(2), Subject: "no id"}
+	key := mail.Key(h)
+	if strings.HasPrefix(key, "m:") {
+		t.Fatalf("setup: key %q is not a hash key", key)
+	}
+	inbox := fake.Append("INBOX", h)
+	userMove(t, fake, "INBOX", inbox, "SaneLater")
+	rep := runProcess(t, fake, st, cfg, false)
+	if got := trainedOf(rep, "hash@x.test"); len(got) != 1 || got[0].To != "SaneLater" {
+		t.Fatalf("filing did not train: %+v", rep.Trained)
+	}
+	if tr := trainingOf(t, st, "hash@x.test"); len(tr) != 1 || tr[0].MessageKey != key {
+		t.Errorf("training = %+v", tr)
+	}
+	if msgs, _ := st.Messages(bg); msgs[key].Folder != "SaneLater" {
+		t.Fatalf("hash-keyed arrival not remembered: %+v", msgs[key])
+	}
+	userMove(t, fake, "SaneLater", uidOf(t, fake, "SaneLater", "hash@x.test"), "INBOX")
+	rep = runProcess(t, fake, st, cfg, false)
+	if rep.Skipped != 1 {
+		t.Errorf("skipped = %d", rep.Skipped)
+	}
+	returnedAndPinned(t, fake, st, func(dry bool) *ProcessReport { return runProcess(t, fake, st, cfg, dry) }, rep, "hash@x.test", key, "SaneLater", 1)
+}
+
+// A pass that fails after spotting a return but before its INBOX cursor
+// advanced is replayed: the return must still be recognised, so the
+// messages row may only be forgotten together with the cursor.
+func TestProcessReturnSurvivesAnInterruptedPass(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	runProcess(t, fake, st, cfg, false) // file the fixture's new INBOX mail
+	fake.Append("SaneLater", newMail("me@example.test", 0, "<me2>", nil))
+	runProcess(t, fake, st, cfg, false) // remembers <me2> in SaneLater, trains nothing (own address)
+	if msgs, _ := st.Messages(bg); msgs["m:<me2>"].Folder != "SaneLater" {
+		t.Fatal("setup: <me2> not remembered")
+	}
+	userMove(t, fake, "SaneLater", uidOfID(t, fake, "SaneLater", "<me2>"), "INBOX") // returnExplained (own address)
+	nl := newsletterMail("<nl3>")
+	nl.From = "other@weekly.test"
+	fake.Append("INBOX", nl) // will be filed, and the pass dies right then
+
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	fake.OnMove = func(from, to string, uid uint32) { cancel() }
+	if _, err := Process(ctx, cfg, fake, st, ProcessOptions{Now: learnNow}); err == nil {
+		t.Fatal("setup: the pass did not fail")
+	}
+	fake.OnMove = nil
+	if msgs, _ := st.Messages(bg); msgs["m:<me2>"].Folder != "SaneLater" {
+		t.Error("the return's messages row was forgotten before the INBOX cursor advanced")
+	}
+	rep := runProcess(t, fake, st, cfg, false)
+	if rep.Fetched != 1 || rep.Skipped != 1 || rep.Stayed != 0 {
+		t.Errorf("replay: fetched=%d skipped=%d stayed=%d, want the return skipped, not classified", rep.Fetched, rep.Skipped, rep.Stayed)
+	}
+	if msgs, _ := st.Messages(bg); func() bool { _, ok := msgs["m:<me2>"]; return ok }() {
+		t.Error("the messages row survived the completed pass")
 	}
 }

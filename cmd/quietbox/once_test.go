@@ -79,14 +79,19 @@ func TestWriteProcessReportShowsWarnings(t *testing.T) {
 
 func TestWriteProcessReportShowsTraining(t *testing.T) {
 	rep := &engine.ProcessReport{Trained: []engine.TrainOutcome{
-		{Sender: "a@x.test", From: "", To: "SaneLater", Source: "move", Status: engine.TrainDone},
-		{Sender: "b@x.test", From: "SaneNews", To: "INBOX", Source: "move", Status: engine.TrainDone},
-		{Sender: "a@x.test", From: "SaneLater", To: "SaneBulk", Source: "move", Status: engine.TrainDone},
+		{Sender: "a@x.test", To: "SaneLater", Source: "move", Status: engine.TrainDone},
+		{Sender: "b@x.test", From: "SaneNews", Route: "SaneNews", To: "INBOX", Source: "move", Status: engine.TrainDone},
+		{Sender: "a@x.test", Route: "SaneLater", To: "SaneBulk", Source: "move", Status: engine.TrainDone},
 	}}
 	var buf bytes.Buffer
 	_ = writeProcessReport(&buf, rep, false)
 	out := buf.String()
-	for _, want := range []string{"trained a@x.test: (no route) -> SaneLater", "trained b@x.test: SaneNews -> INBOX", "trained 2 sender(s)"} {
+	for _, want := range []string{
+		"trained a@x.test: you moved a message to SaneLater\n",
+		"trained b@x.test: you moved a message from SaneNews to INBOX\n",
+		"trained a@x.test: you moved a message to SaneBulk (route was SaneLater)\n",
+		"trained 2 sender(s)",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q:\n%s", want, out)
 		}
@@ -96,8 +101,24 @@ func TestWriteProcessReportShowsTraining(t *testing.T) {
 	rep.Trained[0].Status = engine.TrainWould
 	buf.Reset()
 	_ = writeProcessReport(&buf, rep, true)
-	if out := buf.String(); !strings.Contains(out, "would train a@x.test: (no route) -> SaneLater") || !strings.Contains(out, "would train 1 sender(s)") {
+	if out := buf.String(); !strings.Contains(out, "would train a@x.test: you moved a message to SaneLater") || !strings.Contains(out, "would train 1 sender(s)") {
 		t.Errorf("dry-run report = %s", out)
+	}
+}
+
+func TestWriteProcessReportShowsNotesWithoutFailing(t *testing.T) {
+	rep := &engine.ProcessReport{Notes: []string{"training from moves starts now for SaneNews; earlier moves are not learned"}}
+	var buf bytes.Buffer
+	_ = writeProcessReport(&buf, rep, false)
+	if !strings.Contains(buf.String(), "note: training from moves starts now for SaneNews") {
+		t.Errorf("report = %s", buf.String())
+	}
+	if err := processReportError(rep); err != nil {
+		t.Errorf("notes alone must not fail the run: %v", err)
+	}
+	rep.Warnings = []string{"INBOX was renumbered"}
+	if err := processReportError(rep); err == nil {
+		t.Error("a warning should still fail the run")
 	}
 }
 

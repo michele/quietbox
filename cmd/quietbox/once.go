@@ -79,7 +79,7 @@ With --dry-run it prints what it would do and changes nothing.`,
 
 // processReportError makes the exit status non-zero when something needs
 // attention, so cron mails it: failed moves, or a warning such as a folder the
-// server renumbered.
+// server renumbered. Notes are information only and never fail the run.
 func processReportError(rep *engine.ProcessReport) error {
 	switch {
 	case rep.Failed > 0:
@@ -126,6 +126,9 @@ func writeProcessReport(w io.Writer, rep *engine.ProcessReport, dryRun bool) err
 			verb = "would train"
 		}
 		_, _ = fmt.Fprintf(w, "%s %d sender(s) from your moves\n", verb, n)
+	}
+	for _, note := range rep.Notes {
+		_, _ = fmt.Fprintf(w, "note: %s\n", note)
 	}
 	for _, warn := range rep.Warnings {
 		_, _ = fmt.Fprintf(w, "warning: %s\n", warn)

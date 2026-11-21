@@ -47,6 +47,7 @@ type ownMoves struct {
 	dests     map[destKey]bool
 	keyFolder map[keyFolder]bool   // rows with DestUID == 0
 	moved     map[string]time.Time // latest done, not-undone move per key
+	movedTo   map[string]string    // the folder of that move
 }
 
 // auditDone reports whether a row's move really happened ("" is stored as done).
@@ -59,6 +60,7 @@ func newOwnMoves(rows []store.AuditRow) *ownMoves {
 		dests:     make(map[destKey]bool),
 		keyFolder: make(map[keyFolder]bool),
 		moved:     make(map[string]time.Time),
+		movedTo:   make(map[string]string),
 	}
 	for _, r := range rows {
 		if (r.Action != store.ActionMove && r.Action != store.ActionUndoMove) || !auditDone(r) {
@@ -74,6 +76,7 @@ func newOwnMoves(rows []store.AuditRow) *ownMoves {
 		if r.Action == store.ActionMove && !r.Undone {
 			if at, ok := o.moved[r.MessageKey]; !ok || r.At.After(at) {
 				o.moved[r.MessageKey] = r.At
+				o.movedTo[r.MessageKey] = r.ToFolder
 			}
 		}
 	}
@@ -147,21 +150,42 @@ const (
 )
 
 // TrainOutcome is one sender route a pass trained (or would train). From is
-// the folder the sender's route had before, "" if it had none. It holds
-// addresses and folder names only.
-type TrainOutcome struct{ Sender, From, To, Source, Status string }
+// the folder you moved the message out of when it is known (a return to
+// INBOX), "" otherwise; Route is the sender's route before, "" if none. It
+// holds addresses and folder names only.
+type TrainOutcome struct{ Sender, From, Route, To, Source, Status string }
 
 // String is the report line for the outcome.
 func (t TrainOutcome) String() string {
-	from := t.From
-	if from == "" {
-		from = "(no route)"
-	}
 	verb := "trained"
 	if t.Status == TrainWould {
 		verb = "would train"
 	}
-	return fmt.Sprintf("%s %s: %s -> %s", verb, t.Sender, from, t.To)
+	return fmt.Sprintf("%s %s: %s", verb, t.Sender, movedText(t.From, t.Route, t.To))
+}
+
+// movedText says what you did: "you moved a message from A to B", or, when
+// the origin is unknown, "you moved a message to B (route was R)".
+func movedText(origin, route, to string) string {
+	switch {
+	case origin != "":
+		return fmt.Sprintf("you moved a message from %s to %s", origin, to)
+	case route != "":
+		return fmt.Sprintf("you moved a message to %s (route was %s)", to, route)
+	}
+	return fmt.Sprintf("you moved a message to %s", to)
+}
+
+// trainReason is the stored reason of a trained route, shown by `explain`.
+func trainReason(origin, route, to string, now time.Time) string {
+	day := now.Format(time.DateOnly)
+	switch {
+	case origin != "":
+		return fmt.Sprintf("you moved a message from %s to %s on %s", origin, to, day)
+	case route != "":
+		return fmt.Sprintf("route was %s; you moved a message to %s on %s", route, to, day)
+	}
+	return fmt.Sprintf("you moved a message to %s on %s", to, day)
 }
 
 // TrainedSenders is the number of distinct senders the pass trained.
@@ -212,36 +236,40 @@ type trainedRoute struct {
 	At                                 time.Time
 }
 
+// pendingEvent is a training event and the folder the message was moved out
+// of, when known ("" for typed-folder arrivals: arrivals carry no origin).
+type pendingEvent struct {
+	trainEvent
+	Origin string
+}
+
 // applyTraining applies events in order to the knowledge k (later wins per
 // sender) and returns what a real run must persist. An event that matches the
 // sender's current trained route changes nothing. It does no I/O, so the
 // caller can persist the result in the same transaction as the cursor.
-func applyTraining(k *classify.Knowledge, pt *passTraining, events []trainEvent, source string, o ProcessOptions, rep *ProcessReport) []trainedRoute {
+func applyTraining(k *classify.Knowledge, pt *passTraining, events []pendingEvent, source string, o ProcessOptions, rep *ProcessReport) []trainedRoute {
 	var out []trainedRoute
 	for _, e := range events {
 		if prev, ok := pt.last[e.Sender]; ok && prev != e.Folder && !pt.warned[e.Sender] {
 			pt.warned[e.Sender] = true
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("moves for %s disagreed in one pass; the last one won", e.Sender))
+			rep.Notes = append(rep.Notes, fmt.Sprintf("moves for %s disagreed in one pass; the last one won", e.Sender))
 		}
 		pt.last[e.Sender] = e.Folder
 		cur, had := k.Senders[e.Sender]
 		if had && cur.Trained && !cur.Mixed && cur.Folder == e.Folder {
 			continue
 		}
-		from := ""
+		route := ""
 		if had {
-			from = cur.Folder
+			route = cur.Folder
 		}
-		reason := fmt.Sprintf("moved to %s on %s", e.Folder, o.Now.Format(time.DateOnly))
-		if from != "" {
-			reason = fmt.Sprintf("moved from %s to %s on %s", from, e.Folder, o.Now.Format(time.DateOnly))
-		}
+		reason := trainReason(e.Origin, route, e.Folder, o.Now)
 		k.Senders[e.Sender] = classify.SenderRoute{Folder: e.Folder, Trained: true, Reason: reason}
 		status := TrainDone
 		if o.DryRun {
 			status = TrainWould
 		}
-		rep.Trained = append(rep.Trained, TrainOutcome{Sender: e.Sender, From: from, To: e.Folder, Source: source, Status: status})
+		rep.Trained = append(rep.Trained, TrainOutcome{Sender: e.Sender, From: e.Origin, Route: route, To: e.Folder, Source: source, Status: status})
 		out = append(out, trainedRoute{Sender: e.Sender, Folder: e.Folder, MessageKey: e.MessageKey, Reason: reason, At: o.Now})
 	}
 	return out
@@ -298,6 +326,7 @@ func processTyped(ctx context.Context, cfg *config.Config, b mail.Backend, st *s
 	for _, f := range server {
 		onServer[f.Name] = true
 	}
+	var started []string // folders that got their first cursor in this pass
 	for _, cf := range cfg.Folders {
 		if cf.Name == k.Inbox || cf.Name == sentName || !onServer[cf.Name] {
 			continue
@@ -305,18 +334,21 @@ func processTyped(ctx context.Context, cfg *config.Config, b mail.Backend, st *s
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := processTypedFolder(ctx, b, st, o, k, pt, cf.Name, rep); err != nil {
+		if err := processTypedFolder(ctx, b, st, o, k, pt, cf.Name, &started, rep); err != nil {
 			return err
 		}
+	}
+	if len(started) > 0 {
+		rep.Notes = append(rep.Notes, fmt.Sprintf("training from moves starts now for %s; earlier moves are not learned", strings.Join(started, ", ")))
 	}
 	return nil
 }
 
-func processTypedFolder(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, k *classify.Knowledge, pt *passTraining, folder string, rep *ProcessReport) error {
-	if ok, err := ensureCursor(ctx, b, st, o, folder, rep); err != nil || !ok {
+func processTypedFolder(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, k *classify.Knowledge, pt *passTraining, folder string, started *[]string, rep *ProcessReport) error {
+	if ok, err := ensureCursor(ctx, b, st, o, folder, started); err != nil || !ok {
 		return err
 	}
-	cur, status, ok, err := checkCursor(ctx, b, st, o, folder, rep)
+	cur, status, ok, err := checkCursor(ctx, b, st, o, folder, "nothing was learned from it", rep)
 	if err != nil || !ok {
 		return err
 	}
@@ -331,7 +363,7 @@ func processTypedFolder(ctx context.Context, b mail.Backend, st *store.Store, o 
 	}
 	maxUID := cur.NextUID - 1
 	var rows []store.MessageRow
-	var events []trainEvent
+	var events []pendingEvent
 	for _, a := range arrivals {
 		maxUID = max(maxUID, a.H.UID)
 		row := store.MessageRow{Key: a.Key, Folder: folder, InternalDate: a.H.InternalDate}
@@ -341,7 +373,7 @@ func processTypedFolder(ctx context.Context, b mail.Backend, st *store.Store, o 
 			continue // quietbox put it there
 		}
 		if ev, ok := fileEvent(a, k.Me); ok {
-			events = append(events, ev)
+			events = append(events, pendingEvent{trainEvent: ev})
 		}
 	}
 	progress(o, "%s: %d new message(s), %d moved there by you", folder, len(arrivals), len(events))
@@ -367,8 +399,9 @@ func processTypedFolder(ctx context.Context, b mail.Backend, st *store.Store, o 
 
 // ensureCursor reports whether a typed folder has a cursor. A database from
 // before M4 has none: a real run starts one at the folder's current end (moves
-// made before now are not learned); a dry run skips the folder.
-func ensureCursor(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, folder string, rep *ProcessReport) (bool, error) {
+// made before now are not learned, and the folder is added to started); a dry
+// run skips the folder.
+func ensureCursor(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, folder string, started *[]string) (bool, error) {
 	if _, found, err := st.Cursor(ctx, folder); err != nil || found {
 		return found, err
 	}
@@ -382,6 +415,6 @@ func ensureCursor(ctx context.Context, b mail.Backend, st *store.Store, o Proces
 	if err := st.SetCursor(ctx, store.Cursor{Folder: folder, UIDValidity: fs.UIDValidity, NextUID: fs.UIDNext}); err != nil {
 		return false, err
 	}
-	rep.Warnings = append(rep.Warnings, fmt.Sprintf("training from moves starts now for %s; earlier moves are not learned", folder))
+	*started = append(*started, folder)
 	return false, nil
 }

@@ -42,7 +42,8 @@ type ProcessReport struct {
 	Failed   int
 	Moves    []MoveOutcome
 	Trained  []TrainOutcome // sender routes learned from your moves, in order
-	Warnings []string
+	Warnings []string       // faults that need attention: they make `once` exit non-zero
+	Notes    []string       // information only, e.g. training starting on a folder
 }
 
 // LockPath is where the instance lock for a configuration lives.
@@ -167,8 +168,9 @@ func reconcile(ctx context.Context, b mail.Backend, st *store.Store, rep *Proces
 // checkCursor returns a folder's cursor if it is still valid. When the server's
 // UIDVALIDITY changed, the stored UIDs mean nothing: it resets the cursor to the
 // folder's current end (unless dry-run), warns, and reports ok=false so the
-// caller skips the folder.
-func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, folder string, rep *ProcessReport) (cur store.Cursor, fs mail.FolderStatus, ok bool, err error) {
+// caller skips the folder. skipped says what that means for the folder, e.g.
+// "nothing was moved from it".
+func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOptions, folder, skipped string, rep *ProcessReport) (cur store.Cursor, fs mail.FolderStatus, ok bool, err error) {
 	cur, found, err := st.Cursor(ctx, folder)
 	if err != nil {
 		return cur, fs, false, err
@@ -184,7 +186,7 @@ func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o Process
 		return cur, fs, true, nil
 	}
 	rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-		"%s was renumbered by the server (UIDVALIDITY changed): nothing was moved from it; run `quietbox init` to relearn", folder))
+		"%s was renumbered by the server (UIDVALIDITY changed): %s; run `quietbox init` to relearn", folder, skipped))
 	if !o.DryRun {
 		if err := st.SetCursor(ctx, store.Cursor{Folder: folder, UIDValidity: fs.UIDValidity, NextUID: fs.UIDNext}); err != nil {
 			return cur, fs, false, err
@@ -192,6 +194,8 @@ func checkCursor(ctx context.Context, b mail.Backend, st *store.Store, o Process
 	}
 	return cur, fs, false, nil
 }
+
+const movedNothing = "nothing was moved from it"
 
 // processSent learns from mail you sent since the last pass: new recipients
 // count as "you wrote to them" and new Message-IDs make replies recognisable.
@@ -206,7 +210,7 @@ func processSent(ctx context.Context, cfg *config.Config, b mail.Backend, st *st
 	if err != nil {
 		return refuse(err)
 	}
-	cur, _, ok, err := checkCursor(ctx, b, st, o, sentName, rep)
+	cur, _, ok, err := checkCursor(ctx, b, st, o, sentName, movedNothing, rep)
 	if err != nil || !ok {
 		return err
 	}
@@ -254,7 +258,7 @@ func processSent(ctx context.Context, cfg *config.Config, b mail.Backend, st *st
 // moved, whatever its flags, and is forgotten from `messages`.
 func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *config.Config, o ProcessOptions, k classify.Knowledge, targets classify.Targets, pt *passTraining, rep *ProcessReport) error {
 	inbox := k.Inbox
-	cur, status, ok, err := checkCursor(ctx, b, st, o, inbox, rep)
+	cur, status, ok, err := checkCursor(ctx, b, st, o, inbox, movedNothing, rep)
 	if err != nil || !ok {
 		return err
 	}
@@ -273,7 +277,7 @@ func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *con
 	rep.Fetched = len(batch)
 	progress(o, "%s: %d new message(s)", inbox, len(batch))
 
-	returned, err := inboxReturns(ctx, st, o, &k, pt, batch, status.UIDValidity, rep)
+	returned, forget, err := inboxReturns(ctx, st, o, &k, pt, batch, status.UIDValidity, rep)
 	if err != nil {
 		return err
 	}
@@ -330,10 +334,17 @@ func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *con
 	if updated.BacklogBelow != 0 && updated.NextUID >= updated.BacklogBelow {
 		updated.BacklogBelow = 0 // the backlog has been swept
 	}
-	if updated != cur {
-		return st.SetCursor(ctx, updated)
+	if updated == cur && len(forget) == 0 {
+		return nil
 	}
-	return nil
+	// Returns are forgotten only with the cursor: a pass that fails before
+	// this point is replayed and still sees them as returns.
+	return st.Update(ctx, func(tx *store.Tx) error {
+		if err := tx.ForgetMessages(forget); err != nil {
+			return err
+		}
+		return tx.SetCursor(updated)
+	})
 }
 
 // fileMessage records the intent, moves the message, and records the outcome.
@@ -367,12 +378,13 @@ func fileMessage(ctx context.Context, b mail.Backend, st *store.Store, o Process
 }
 
 // inboxReturns finds the INBOX arrivals that came back from a typed folder and
-// returns their UIDs. Events from returns the user made are applied to k; a
-// real run persists them, and forgets the returned messages, before any
-// classification move.
-func inboxReturns(ctx context.Context, st *store.Store, o ProcessOptions, k *classify.Knowledge, pt *passTraining, batch []mail.Header, validity uint32, rep *ProcessReport) (map[uint32]bool, error) {
+// returns their UIDs and keys. Events from returns the user made are applied
+// to k, and a real run persists them before any classification move. The
+// returned keys are forgotten from `messages` by the caller, together with the
+// INBOX cursor.
+func inboxReturns(ctx context.Context, st *store.Store, o ProcessOptions, k *classify.Knowledge, pt *passTraining, batch []mail.Header, validity uint32, rep *ProcessReport) (map[uint32]bool, []string, error) {
 	returned := map[uint32]bool{}
-	var events []trainEvent
+	var events []pendingEvent
 	var forget []string
 	for _, h := range batch {
 		a := newArrival(h, k.Inbox, validity)
@@ -382,19 +394,18 @@ func inboxReturns(ctx context.Context, st *store.Store, o ProcessOptions, k *cla
 		}
 		returned[h.UID] = true
 		forget = append(forget, a.Key)
+		origin := pt.known[a.Key].Folder
+		if origin == "" {
+			origin = pt.own.movedTo[a.Key] // found through the audit log
+		}
 		delete(pt.known, a.Key)
 		if v == returnTrained {
-			events = append(events, ev)
+			events = append(events, pendingEvent{trainEvent: ev, Origin: origin})
 		}
 	}
 	routes := applyTraining(k, pt, events, store.TrainMove, o, rep)
-	if o.DryRun || len(forget) == 0 {
-		return returned, nil
+	if o.DryRun || len(routes) == 0 {
+		return returned, forget, nil
 	}
-	return returned, st.Update(ctx, func(tx *store.Tx) error {
-		if err := tx.ForgetMessages(forget); err != nil {
-			return err
-		}
-		return recordTraining(tx, routes, store.TrainMove)
-	})
+	return returned, forget, st.Update(ctx, func(tx *store.Tx) error { return recordTraining(tx, routes, store.TrainMove) })
 }
