@@ -82,12 +82,18 @@ func (c *Config) resolvePassword(ctx context.Context, d passwordDeps) ([]string,
 	return warnings, nil
 }
 
-// inContainer guesses whether we run in a container: QUIETBOX_CONTAINER=0 says
-// no and any other value says yes; otherwise Kubernetes or the Docker/Podman
-// marker files. A heuristic, which is why it can be declared.
+// inContainer guesses whether we run in a container: QUIETBOX_CONTAINER set to
+// 0, false, no or off says no, any other value says yes; otherwise Kubernetes
+// or the Docker/Podman marker files. A heuristic, which is why it can be
+// declared. (A "false" must never count as "yes": that would weaken the
+// password file permission check.)
 func inContainer(getenv func(string) string, exists func(string) bool) bool {
 	if v := getenv("QUIETBOX_CONTAINER"); v != "" {
-		return v != "0"
+		switch strings.ToLower(v) {
+		case "0", "false", "no", "off":
+			return false
+		}
+		return true
 	}
 	return getenv("KUBERNETES_SERVICE_HOST") != "" || exists("/.dockerenv") || exists("/run/.containerenv")
 }

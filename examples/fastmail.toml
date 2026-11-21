@@ -6,6 +6,11 @@
 #
 #   export QUIETBOX_IMAP_PASSWORD='your-app-password'
 #
+# Safer for anything long-running: keep it in a file (chmod 600) or a keychain and
+# uncomment ONE of these lines under [imap] below:
+#   password_file = "~/.config/quietbox/fastmail.pw"
+#   password_command = "pass show mail/fastmail"
+#
 # Usage:
 #   quietbox check --config examples/fastmail.toml
 #   quietbox init --dry-run --config examples/fastmail.toml

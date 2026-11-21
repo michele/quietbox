@@ -195,6 +195,10 @@ func TestInContainer(t *testing.T) {
 		{"docker marker", nil, fakeFS{"/.dockerenv": {}}, true},
 		{"podman marker", nil, fakeFS{"/run/.containerenv": {}}, true},
 		{"0 forces off even with a marker", map[string]string{"QUIETBOX_CONTAINER": "0"}, fakeFS{"/.dockerenv": {}}, false},
+		{"false forces off", map[string]string{"QUIETBOX_CONTAINER": "false"}, fakeFS{"/.dockerenv": {}}, false},
+		{"No forces off", map[string]string{"QUIETBOX_CONTAINER": "No"}, fakeFS{"/.dockerenv": {}}, false},
+		{"off forces off", map[string]string{"QUIETBOX_CONTAINER": "off"}, fakeFS{}, false},
+		{"true forces on", map[string]string{"QUIETBOX_CONTAINER": "true"}, fakeFS{}, true},
 	}
 	for _, c := range cases {
 		d := c.files.deps(c.env)
