@@ -284,6 +284,12 @@ type progressLog struct {
 
 func (p *progressLog) add(s string) { p.mu.Lock(); p.lines = append(p.lines, s); p.mu.Unlock() }
 
+func (p *progressLog) all() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.lines...)
+}
+
 func (p *progressLog) count(sub string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -481,4 +487,75 @@ func TestRunReleasesLocksOnProcessError(t *testing.T) {
 			t.Error("a lock is still held after Run refused")
 		}
 	})
+}
+
+// A long wait for the pass lock is not silent: the first notice names the
+// lock file, then "still waiting" repeats with the time waited.
+func TestRunRepeatsThePassLockNotice(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	h := &idleHook{Fake: fake}
+	release := holdPassLock(t, LockPath(cfg))
+	var log progressLog
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect:    func(context.Context) (mail.Backend, error) { return h, nil },
+		Backoff:    fastBackoff,
+		Progress:   log.add,
+		LockNotice: 300 * time.Millisecond,
+	})
+	waitFor(t, "two still-waiting notices", func() bool { return log.count("still waiting for the pass lock after ") >= 2 })
+	if n := log.count("waiting for another quietbox... (lock file " + LockPath(cfg) + ")"); n != 1 {
+		t.Errorf("first notice with the lock file said %d times, want once\n%v", n, log.all())
+	}
+	if n := log.count("(lock file " + LockPath(cfg) + ")"); n < 3 {
+		t.Errorf("only %d notices name the lock file, want every one\n%v", n, log.all())
+	}
+	if fake.MoveCount() != 0 {
+		t.Fatalf("a pass ran while the pass lock was held")
+	}
+	release()
+	waitFor(t, "the pass after the lock was released", func() bool { return fake.MoveCount() == 7 && h.idles.Load() == 1 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunRepeatedNoticeStopsPromptlyOnCancel(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	release := holdPassLock(t, LockPath(cfg))
+	var log progressLog
+	stop := startRun(t, cfg, st, RunOptions{
+		Connect:    func(context.Context) (mail.Backend, error) { return fake, nil },
+		Backoff:    fastBackoff,
+		Progress:   log.add,
+		LockNotice: 300 * time.Millisecond,
+	})
+	waitFor(t, "a still-waiting notice", func() bool { return log.count("still waiting for the pass lock") >= 1 })
+	start := time.Now()
+	if err := stop(); err != nil {
+		t.Fatalf("Run = %v, want nil on cancel", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("cancel took %s", d)
+	}
+	if !lockFree(DaemonLockPath(cfg)) {
+		t.Error("daemon lock still held after Run returned")
+	}
+	release()
+	if !lockFree(LockPath(cfg)) {
+		t.Error("Run left the pass lock held")
+	}
+}
+
+func TestWaitedFor(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		1300 * time.Millisecond:               "1s",
+		5*time.Minute + 1200*time.Millisecond: "5m",
+		15*time.Minute + 20*time.Second:       "15m",
+		time.Hour + 2*time.Second:             "1h",
+		time.Hour + 30*time.Minute:            "1h30m",
+	} {
+		if got := waitedFor(d); got != want {
+			t.Errorf("waitedFor(%v) = %q, want %q", d, got, want)
+		}
+	}
 }
