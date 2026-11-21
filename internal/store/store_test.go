@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -186,7 +187,7 @@ func TestMigrationV2KeepsV1Data(t *testing.T) {
 	}
 	_ = s.Update(ctx, func(tx *Tx) error { return tx.ReplaceSentTo([]SentRow{{"a@x.test", 2, at(3)}}) })
 	// Simulate a database left at schema v1.
-	if _, err := s.db.Exec(`DROP TABLE sent_message_ids; DROP TABLE cursors;
+	if _, err := s.db.Exec(`DROP TABLE meta; DROP TABLE sent_message_ids; DROP TABLE cursors;
 		ALTER TABLE audit DROP COLUMN status;
 		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
 		ALTER TABLE audit DROP COLUMN dest_uid;
@@ -338,7 +339,7 @@ func TestMigration3KeepsOldAuditRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simulate a database left at schema v2 holding a create_folder row.
-	if _, err := s.db.Exec(`DROP TABLE cursors;
+	if _, err := s.db.Exec(`DROP TABLE meta; DROP TABLE cursors;
 		ALTER TABLE audit DROP COLUMN status;
 		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
 		ALTER TABLE audit DROP COLUMN dest_uid;
@@ -430,5 +431,67 @@ func TestCursorRoundTrip(t *testing.T) {
 	c, ok, err := s.Cursor(ctx, "INBOX")
 	if err != nil || !ok || c.NextUID != 15 || c.UIDValidity != 3 {
 		t.Fatalf("cursor = %+v ok=%v err=%v", c, ok, err)
+	}
+}
+
+func TestMigration4KeepsOldData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetCursor(ctx, Cursor{Folder: "INBOX", UIDValidity: 2, NextUID: 9}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a database left at schema v3 (no meta table, no backlog column).
+	if _, err := s.db.Exec(`DROP TABLE meta; ALTER TABLE cursors DROP COLUMN backlog_below; PRAGMA user_version = 3`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	c, ok, err := s.Cursor(ctx, "INBOX")
+	if err != nil || !ok || c.NextUID != 9 || c.UIDValidity != 2 || c.BacklogBelow != 0 {
+		t.Fatalf("cursor = %+v ok=%v err=%v", c, ok, err)
+	}
+}
+
+func TestBindAccountAdoptsThenRefusesOther(t *testing.T) {
+	s := openTest(t)
+	if err := s.BindAccount(ctx, "me@imap.a.test"); err != nil {
+		t.Fatalf("first bind: %v", err)
+	}
+	if err := s.BindAccount(ctx, "me@imap.a.test"); err != nil {
+		t.Fatalf("same account: %v", err)
+	}
+	err := s.BindAccount(ctx, "other@imap.b.test")
+	if !errors.Is(err, ErrWrongAccount) {
+		t.Fatalf("err = %v, want ErrWrongAccount", err)
+	}
+	for _, want := range []string{"me@imap.a.test", "other@imap.b.test", "[state] path"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message %q does not mention %q", err, want)
+		}
+	}
+}
+
+func TestCursorBacklogRoundTrip(t *testing.T) {
+	s := openTest(t)
+	want := Cursor{Folder: "INBOX", UIDValidity: 4, NextUID: 10, BacklogBelow: 50}
+	if err := s.SetCursor(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.Cursor(ctx, "INBOX"); got != want {
+		t.Fatalf("Store.SetCursor: %+v", got)
+	}
+	want.NextUID, want.BacklogBelow = 20, 0
+	if err := s.Update(ctx, func(tx *Tx) error { return tx.SetCursor(want) }); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.Cursor(ctx, "INBOX"); got != want {
+		t.Fatalf("Tx.SetCursor: %+v", got)
 	}
 }

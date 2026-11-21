@@ -74,4 +74,12 @@ CREATE TABLE cursors (
 	next_uid    INTEGER NOT NULL
 );
 `,
+	// 4: which account owns this database, and where an init --backlog sweep ends.
+	`
+CREATE TABLE meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
+ALTER TABLE cursors ADD COLUMN backlog_below INTEGER NOT NULL DEFAULT 0;
+`,
 }
