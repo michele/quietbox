@@ -334,7 +334,11 @@ func TestRunHoldsDaemonLockForLife(t *testing.T) {
 	stop := startRun(t, cfg, st, RunOptions{Connect: connect, Backoff: fastBackoff})
 	waitFor(t, "the first run to go idle", func() bool { return h.idles.Load() == 1 })
 
-	err := Run(bg, cfg, st, RunOptions{Connect: connect, Backoff: fastBackoff})
+	// A short deadline: a regression that lets the second Run in must fail
+	// fast, not hang the test until the package timeout.
+	ctx2, cancel2 := context.WithTimeout(bg, 3*time.Second)
+	defer cancel2()
+	err := Run(ctx2, cfg, st, RunOptions{Connect: connect, Backoff: fastBackoff})
 	if err == nil || !strings.Contains(err.Error(), "another quietbox run is already running") {
 		t.Fatalf("second Run = %v, want the daemon-lock refusal", err)
 	}
@@ -356,10 +360,9 @@ func TestRunHoldsDaemonLockForLife(t *testing.T) {
 func TestRunWaitsForPassLockHeldByAnotherProcess(t *testing.T) {
 	fake, st, cfg := processBox(t)
 	h := &idleHook{Fake: fake}
-	release, err := AcquireLock(LockPath(cfg)) // another fd: flock treats it like another process
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Another fd: flock treats it like another process. The cleanup releases
+	// it even if a Fatalf below cuts the test short.
+	release := holdPassLock(t, LockPath(cfg))
 	var log progressLog
 	stop := startRun(t, cfg, st, RunOptions{
 		Connect:  func(context.Context) (mail.Backend, error) { return h, nil },
@@ -382,10 +385,7 @@ func TestRunWaitsForPassLockHeldByAnotherProcess(t *testing.T) {
 
 func TestRunCancelWhileWaitingForPassLock(t *testing.T) {
 	fake, st, cfg := processBox(t)
-	release, err := AcquireLock(LockPath(cfg))
-	if err != nil {
-		t.Fatal(err)
-	}
+	release := holdPassLock(t, LockPath(cfg)) // released by cleanup if a Fatalf cuts the test short
 	var connects atomic.Int32
 	var log progressLog
 	stop := startRun(t, cfg, st, RunOptions{

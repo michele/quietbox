@@ -99,7 +99,7 @@ func TestProcessLockTimeout(t *testing.T) {
 func TestUndoWaitsForPassLockThenRuns(t *testing.T) {
 	fake, st, cfg := processBox(t)
 	runProcess(t, fake, st, cfg, false)
-	releaseAfter(1200*time.Millisecond, holdPassLock(t, LockPath(cfg)))
+	releaseAfter(1800*time.Millisecond, holdPassLock(t, LockPath(cfg)))
 	var moves, unlocked, waits atomic.Int32
 	fake.OnMove = func(string, string, uint32) {
 		moves.Add(1)
