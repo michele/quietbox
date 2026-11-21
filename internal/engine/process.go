@@ -37,7 +37,7 @@ type MoveOutcome struct {
 // ProcessReport is what one pass did.
 type ProcessReport struct {
 	Fetched  int // new INBOX messages looked at
-	Skipped  int // left alone: seen, flagged, already moved once, or dragged back by you
+	Skipped  int // left alone: seen, flagged, already moved once, back in INBOX from a typed folder, or a known message that is not a return
 	Stayed   int // classified as staying in INBOX
 	Failed   int
 	Moves    []MoveOutcome

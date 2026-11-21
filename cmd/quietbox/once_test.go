@@ -49,7 +49,7 @@ func TestWriteProcessReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, want := range []string{"writer@substack.test", "SaneNews", "noreply@shop.test", "failed", "1 failed", "5 new", "1 skipped"} {
+	for _, want := range []string{"writer@substack.test", "SaneNews", "noreply@shop.test", "failed", "1 failed", "5 new", "1 skipped (read, flagged, moved once before, moved back by you, or a copy of mail already seen)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q:\n%s", want, out)
 		}

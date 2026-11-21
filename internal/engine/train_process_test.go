@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -876,5 +877,45 @@ func TestProcessReturnSurvivesAnInterruptedPass(t *testing.T) {
 	}
 	if msgs, _ := st.Messages(bg); func() bool { _, ok := msgs["m:<me2>"]; return ok }() {
 		t.Error("the messages row survived the completed pass")
+	}
+}
+
+// A typed folder with nothing new (UIDNEXT not past the cursor) is not
+// fetched; new mail in it still is, and still trains.
+func TestProcessSkipsFetchOfTypedFolderWithNothingNew(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	runProcess(t, fake, st, cfg, false)
+	runProcess(t, fake, st, cfg, false) // our moves of the first pass arrive
+	cursors := map[string]store.Cursor{}
+	for _, f := range typedFolders {
+		cursors[f], _, _ = st.Cursor(bg, f)
+	}
+	var fetched []string
+	fake.OnFetch = func(folder string) { fetched = append(fetched, folder) }
+	rep := runProcess(t, fake, st, cfg, false)
+	for _, f := range fetched {
+		for _, tf := range typedFolders {
+			if f == tf {
+				t.Errorf("fetched %s with nothing new in it", f)
+			}
+		}
+	}
+	if len(rep.Trained) != 0 || len(rep.Warnings) != 0 || len(rep.Notes) != 0 {
+		t.Errorf("trained=%+v warnings=%v notes=%v", rep.Trained, rep.Warnings, rep.Notes)
+	}
+	for _, f := range typedFolders {
+		if c, _, _ := st.Cursor(bg, f); c != cursors[f] {
+			t.Errorf("cursor %s changed: %+v -> %+v", f, cursors[f], c)
+		}
+	}
+
+	fetched = nil
+	fake.Append("SaneLater", newMail("filed@x.test", 0, "<filed1>", nil))
+	rep = runProcess(t, fake, st, cfg, false)
+	if got := trainedOf(rep, "filed@x.test"); len(got) != 1 || got[0].To != "SaneLater" {
+		t.Errorf("new mail in SaneLater did not train: %+v", rep.Trained)
+	}
+	if !slices.Contains(fetched, "SaneLater") || slices.Contains(fetched, "SaneNews") {
+		t.Errorf("fetched = %v, want SaneLater only among the typed folders", fetched)
 	}
 }

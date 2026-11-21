@@ -115,7 +115,7 @@ func writeProcessReport(w io.Writer, rep *engine.ProcessReport, dryRun bool) err
 	if dryRun {
 		verb = "would move"
 	}
-	_, _ = fmt.Fprintf(w, "%d new, %d %s, %d stayed in INBOX, %d skipped (read, flagged or already moved once), %d failed\n",
+	_, _ = fmt.Fprintf(w, "%d new, %d %s, %d stayed in INBOX, %d skipped (read, flagged, moved once before, moved back by you, or a copy of mail already seen), %d failed\n",
 		rep.Fetched, len(rep.Moves)-rep.Failed, verb, rep.Stayed, rep.Skipped, rep.Failed)
 	if n := rep.TrainedSenders(); n > 0 {
 		for _, t := range rep.Trained {

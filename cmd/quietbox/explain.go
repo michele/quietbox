@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -27,10 +29,9 @@ the subject or the body.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			eo := engine.ExplainOptions{Folder: folder}
-			if n, err := strconv.ParseUint(args[0], 10, 32); err == nil && n > 0 {
-				eo.UID = uint32(n)
-			} else {
-				eo.MessageID = "<" + strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(args[0]), "<"), ">") + ">"
+			var err error
+			if eo.UID, eo.MessageID, err = parseExplainArg(args[0]); err != nil {
+				return err
 			}
 			cfg, st, b, err := openMailbox(cmd, opts)
 			if err != nil {
@@ -52,6 +53,28 @@ the subject or the body.`,
 	cmd.Flags().StringVar(&folder, "folder", "", "folder the message is in (default: INBOX)")
 	return cmd
 }
+
+// parseExplainArg reads explain's argument: a number is a UID, anything
+// else a Message-ID (angle brackets optional).
+func parseExplainArg(arg string) (uint32, string, error) {
+	arg = strings.TrimSpace(arg)
+	if n, err := strconv.ParseUint(arg, 10, 32); err == nil {
+		if n == 0 {
+			return 0, "", errExplainUsage
+		}
+		return uint32(n), "", nil
+	}
+	id := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(arg, "<"), ">"))
+	if id == "" {
+		return 0, "", errExplainUsage
+	}
+	return 0, "<" + id + ">", nil
+}
+
+var errExplainUsage = errors.New("explain needs a UID (a number from 1) or a Message-ID")
+
+// explainTime is how explain prints a time: local, with the zone, like undo.
+func explainTime(t time.Time) string { return t.Local().Format("2006-01-02 15:04 MST") }
 
 // inboxName is the configured INBOX folder name.
 func inboxName(cfg *config.Config) string {
@@ -91,7 +114,7 @@ func writeExplanation(w io.Writer, folder string, e *engine.Explanation) {
 	}
 	if len(e.Training) > 0 {
 		t := e.Training[0]
-		p("training:   latest: %s -> %s (%s), %s", t.Sender, t.Folder, t.Source, t.At.Format("2006-01-02 15:04"))
+		p("training:   latest: %s -> %s (%s), %s", t.Sender, t.Folder, t.Source, explainTime(t.At))
 	}
 	if len(e.Audit) > 0 {
 		p("")
@@ -101,7 +124,7 @@ func writeExplanation(w io.Writer, folder string, e *engine.Explanation) {
 			if a.Undone {
 				status += ", undone"
 			}
-			p("  %s %s -> %s, %s, %s", a.Action, a.FromFolder, a.ToFolder, status, a.At.Format("2006-01-02 15:04"))
+			p("  %s %s -> %s, %s, %s", a.Action, a.FromFolder, a.ToFolder, status, explainTime(a.At))
 		}
 	}
 }

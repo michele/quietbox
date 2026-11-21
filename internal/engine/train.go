@@ -384,13 +384,18 @@ func processTypedFolder(ctx context.Context, b mail.Backend, st *store.Store, o 
 		return err
 	}
 	var arrivals []arrival
-	if err := b.FetchFrom(ctx, folder, cur.NextUID, func(hs []mail.Header) error {
-		for _, h := range hs {
-			arrivals = append(arrivals, newArrival(h, folder, status.UIDValidity))
+	// Nothing can have arrived when UIDNEXT has not passed the cursor: skip
+	// the EXAMINE and SEARCH. The cursor logic below still runs unchanged. A
+	// UIDNEXT of 0 (not reported) is not trusted: fetch.
+	if status.UIDNext == 0 || status.UIDNext > cur.NextUID {
+		if err := b.FetchFrom(ctx, folder, cur.NextUID, func(hs []mail.Header) error {
+			for _, h := range hs {
+				arrivals = append(arrivals, newArrival(h, folder, status.UIDValidity))
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("fetch new mail from %s: %w", folder, err)
 		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("fetch new mail from %s: %w", folder, err)
 	}
 	maxUID := cur.NextUID - 1
 	var rows []store.MessageRow

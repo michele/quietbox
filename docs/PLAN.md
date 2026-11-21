@@ -324,7 +324,7 @@ INBOX-only history should count as a learned route is something to decide from `
 ### M4: Training via folder moves: implemented
 - Design: `docs/superpowers/specs/2026-11-21-m4-training-design.md`; plan: `docs/superpowers/plans/2026-11-21-m4-training.md`.
 - **Arrivals only.** No snapshot diff and no departures: `init` gives every configured typed folder a cursor
-  (UIDNEXT read before the scan, as for INBOX), and each pass fetches only `UID >= cursor`. Pass order: lock, MOVE
+  (UIDNEXT read before the scan, as for INBOX), and each pass fetches only `UID >= cursor` (not at all when the folder's UIDNEXT has not passed the cursor). Pass order: lock, MOVE
   check, reconcile, Sent, **typed folders** (config order), INBOX. Training runs before INBOX classification, so
   the mail that wakes `run` is already filed by what you just taught it.
 - **File event.** A message that arrives in a typed folder re-routes its sender there (`route_source = trained`),
@@ -371,7 +371,8 @@ INBOX-only history should count as a learned route is something to decide from `
 - **`explain [--folder F] <uid | message-id>`.** Opens the folder read-only (default INBOX), fetches that one
   message's headers and prints what `Classify` would decide *now*: decision, rule, reason, signals, the sender's
   route and source, its latest training event and the audit rows for the message key. Sender address, UID and
-  Message-ID only; never the subject or body. Takes no lock, writes nothing.
+  Message-ID only; never the subject or body; times in local time with the zone. UID 0 or an empty argument is a
+  usage error before connecting. Takes no lock, writes nothing.
 - No config switch turns training off (on purpose); `senders unset` is the escape hatch.
 - **State.** Schema v5: `messages(key, folder, internal_date)`, `training(...)`, cursors for typed folders.
 - Verified against the Dovecot test server only (`make itest`: filing by hand trains, drag back keeps the sender in

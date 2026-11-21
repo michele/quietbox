@@ -366,7 +366,8 @@ func TestM4ExplainOutput(t *testing.T) {
 	e.once()
 	e.userMove("INBOX", "<x-1@t>", "SaneLater")
 	e.once()
-	e.deliver("INBOX", "stranger@nowhere.test", "<x-2@t>")
+	const bodyMarker = "QBX-BODY-MARKER-7f3a91"
+	e.deliverBody("INBOX", "stranger@nowhere.test", "<x-2@t>", bodyMarker)
 
 	// By Message-ID (angle brackets optional), in INBOX before quietbox saw it.
 	out, err := e.run("explain", "x-2@t")
@@ -387,7 +388,7 @@ func TestM4ExplainOutput(t *testing.T) {
 			t.Errorf("explain output lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "m3 test") || strings.Contains(out, "body") {
+	if strings.Contains(out, "m3 test") || strings.Contains(out, bodyMarker) {
 		t.Errorf("explain leaks the subject or body:\n%s", out)
 	}
 	// Explain only reads: the message is still in INBOX.
@@ -411,8 +412,8 @@ func TestM4ExplainOutput(t *testing.T) {
 			t.Errorf("explain output lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "m3 test") {
-		t.Errorf("explain leaks the subject:\n%s", out)
+	if strings.Contains(out, "m3 test") || strings.Contains(out, bodyMarker) {
+		t.Errorf("explain leaks the subject or body:\n%s", out)
 	}
 }
 
