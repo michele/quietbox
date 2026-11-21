@@ -21,8 +21,9 @@ func newRunCmd(opts *options) *cobra.Command {
 last run, then waits for the server to report new mail and files that too. A lost
 connection is retried with a growing delay. It refuses to start if the server cannot
 MOVE, if 'quietbox init' has not run, or if another 'quietbox run' is running on
-this mailbox. Between passes it holds no lock on the database, so 'once', 'undo' and
-'senders set' can run while it waits; if one of them is mid-pass, run waits for it.
+this mailbox. Between passes it holds only its run lock (which keeps a second 'run'
+out), so 'once', 'undo', 'senders set/unset' and 'init' can work while it waits for
+mail; each of them waits for a pass in progress to end, and run waits for them in turn.
 Every move is audited and can be reversed with 'quietbox undo'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

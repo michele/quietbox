@@ -22,8 +22,9 @@ func newUndoCmd(opts *options) *cobra.Command {
 first, by moving each message from the folder quietbox put it in back to where it
 came from. Nothing is deleted. A message that is no longer where quietbox put it
 (you moved it yourself) is left alone and reported. Restored messages are never
-filed away again. While another quietbox works on the same mailbox it waits for
-it, at most --lock-timeout, then fails.`,
+filed away again. While another quietbox works on the same mailbox (a 'run' pass,
+'once', 'init') it waits for it, at most --lock-timeout, then fails. A dry run never
+waits.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if since == "" {
