@@ -12,6 +12,8 @@ import (
 
 type options struct {
 	configPath string
+	configSet  bool // --config was given explicitly
+	account    string
 	verbose    bool
 }
 
@@ -35,8 +37,13 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&opts.configPath, "config", defaultConfigPath(), "path to the TOML config file")
+	root.PersistentFlags().StringVar(&opts.account, "account", "", "use <config folder>/NAME.toml, with its own database (see `quietbox accounts`)")
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		opts.configSet = cmd.Flags().Changed("config")
+		return nil
+	}
 	root.PersistentFlags().BoolVarP(&opts.verbose, "verbose", "v", false, "print progress to stderr (never credentials)")
-	root.AddCommand(newCheckCmd(opts), newInitCmd(opts), newSendersCmd(opts), newScanCmd(opts), newEvalCmd(opts), newOnceCmd(opts), newRunCmd(opts), newUndoCmd(opts))
+	root.AddCommand(newCheckCmd(opts), newInitCmd(opts), newSendersCmd(opts), newScanCmd(opts), newEvalCmd(opts), newOnceCmd(opts), newRunCmd(opts), newUndoCmd(opts), newAccountsCmd(opts))
 	return root
 }
 

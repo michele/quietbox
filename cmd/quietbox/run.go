@@ -8,11 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/michele/quietbox/internal/config"
 	"github.com/michele/quietbox/internal/engine"
 	"github.com/michele/quietbox/internal/imapbackend"
 	"github.com/michele/quietbox/internal/mail"
-	"github.com/michele/quietbox/internal/store"
 )
 
 func newRunCmd(opts *options) *cobra.Command {
@@ -26,12 +24,12 @@ MOVE, if 'quietbox init' has not run, or if another quietbox is running on this
 mailbox. Every move is audited and can be reversed with 'quietbox undo'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load(opts.configPath)
+			cfg, err := opts.loadConfig(false)
 			if err != nil {
 				return err
 			}
 			// Nothing to do without a previous init; fail before dialing.
-			st, err := store.OpenExisting(cfg.State.Path)
+			st, err := openState(cmd.Context(), cfg, false)
 			if err != nil {
 				return err
 			}

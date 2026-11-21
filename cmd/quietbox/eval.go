@@ -89,7 +89,7 @@ func runEval(cmd *cobra.Command, opts *options, f *evalFlags) error {
 		}
 	}
 
-	cfg, err := config.Load(opts.configPath)
+	cfg, err := opts.loadConfig(false)
 	if err != nil {
 		return err
 	}

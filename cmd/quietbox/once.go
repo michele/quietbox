@@ -18,11 +18,11 @@ import (
 // without a previous `quietbox init`, and it never creates one) and then
 // connects. The database comes first so a missing one fails before any dial.
 func openMailbox(cmd *cobra.Command, opts *options) (*config.Config, *store.Store, mail.Backend, error) {
-	cfg, err := config.Load(opts.configPath)
+	cfg, err := opts.loadConfig(false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	st, err := store.OpenExisting(cfg.State.Path)
+	st, err := openState(cmd.Context(), cfg, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}

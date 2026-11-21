@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/michele/quietbox/internal/config"
 	"github.com/michele/quietbox/internal/engine"
 	"github.com/michele/quietbox/internal/imapbackend"
 )
@@ -16,7 +15,7 @@ func newCheckCmd(opts *options) *cobra.Command {
 		Short: "Connect, list server capabilities and show which configured folders exist (read-only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load(opts.configPath)
+			cfg, err := opts.loadConfig(false)
 			if err != nil {
 				return err
 			}

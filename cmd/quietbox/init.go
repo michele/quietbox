@@ -53,7 +53,7 @@ result before any mail is moved. Running it again rebuilds the learned data.`,
 }
 
 func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
-	cfg, err := config.Load(opts.configPath)
+	cfg, err := opts.loadConfig(false)
 	if err != nil {
 		return err
 	}
@@ -87,9 +87,9 @@ func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
 	var st *store.Store
 	switch {
 	case f.folder != "":
-		st, err = store.OpenExisting(cfg.State.Path)
+		st, err = openState(cmd.Context(), cfg, false)
 	case !f.dryRun:
-		st, err = store.Open(cfg.State.Path)
+		st, err = openState(cmd.Context(), cfg, true)
 	}
 	if err != nil {
 		return err
