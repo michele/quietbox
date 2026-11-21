@@ -195,3 +195,37 @@ func TestTrainingForNewestFirst(t *testing.T) {
 		t.Fatalf("fields = %+v", rows)
 	}
 }
+
+func TestLatestTraining(t *testing.T) {
+	s := openTest(t)
+	if err := s.Update(ctx, func(tx *Tx) error {
+		if _, ok, err := tx.LatestTraining("a@x.com"); err != nil || ok {
+			return fmt.Errorf("empty table: ok=%v err=%v", ok, err)
+		}
+		for i := range 3 {
+			if err := tx.AddTraining(TrainingRow{At: at(i + 1), Sender: "a@x.com", Folder: fmt.Sprint("F", i), Source: TrainMove, MessageKey: fmt.Sprint("k", i)}); err != nil {
+				return err
+			}
+		}
+		r, ok, err := tx.LatestTraining("a@x.com")
+		if err != nil || !ok || r.Folder != "F2" || r.MessageKey != "k2" || !r.At.Equal(at(3)) {
+			return fmt.Errorf("latest = %+v ok=%v err=%v", r, ok, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteCursor(t *testing.T) {
+	s := openTest(t)
+	if err := s.SetCursor(ctx, Cursor{Folder: "SaneNews", UIDValidity: 1, NextUID: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteCursor(ctx, "SaneNews"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.Cursor(ctx, "SaneNews"); err != nil || ok {
+		t.Errorf("cursor still there: ok=%v err=%v", ok, err)
+	}
+}

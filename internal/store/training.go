@@ -175,3 +175,28 @@ func (s *Store) Sender(ctx context.Context, address string) (SenderRow, bool, er
 	r.Mixed, r.UpdatedAt = mixed == 1, fromUnix(at)
 	return r, true, nil
 }
+
+// DeleteCursor removes a folder's cursor (the next pass treats the folder as
+// never seen, like a database from before M4).
+func (s *Store) DeleteCursor(ctx context.Context, folder string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM cursors WHERE folder = ?", folder)
+	return err
+}
+
+// LatestTraining returns a sender's newest training event inside the
+// transaction; ok is false when there is none.
+func (t *Tx) LatestTraining(sender string) (TrainingRow, bool, error) {
+	var r TrainingRow
+	var at int64
+	err := t.tx.QueryRow(
+		"SELECT id, at, sender, folder, source, message_key FROM training WHERE sender = ? ORDER BY at DESC, id DESC LIMIT 1", sender).
+		Scan(&r.ID, &at, &r.Sender, &r.Folder, &r.Source, &r.MessageKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TrainingRow{}, false, nil
+	}
+	if err != nil {
+		return TrainingRow{}, false, err
+	}
+	r.At = fromUnix(at)
+	return r, true, nil
+}
