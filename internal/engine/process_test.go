@@ -463,3 +463,74 @@ func TestProcessLockHeldByCallerIsNotTakenAgain(t *testing.T) {
 		t.Fatalf("LockHeld should skip locking: %v", err)
 	}
 }
+
+// backlogBox is processBox with two read messages appended after the learn run:
+// the first lies inside the backlog (below the boundary), the second after it.
+func backlogBox(t *testing.T) (*mailtest.Fake, *store.Store, *config.Config, uint32, uint32) {
+	t.Helper()
+	fake, st, cfg := processBox(t)
+	read := func(h *mail.Header) { h.Flags = []string{`\Seen`} }
+	in := fake.Append("INBOX", newMail("bk1@substack.test", 0, "<bk1>", read))
+	after := fake.Append("INBOX", newMail("bk2@substack.test", 0, "<bk2>", read))
+	c, _, _ := st.Cursor(bg, "INBOX")
+	c.BacklogBelow = after // everything below `after` is backlog
+	if err := st.SetCursor(bg, c); err != nil {
+		t.Fatal(err)
+	}
+	return fake, st, cfg, in, after
+}
+
+func TestProcessBacklogIgnoresSeen(t *testing.T) {
+	fake, st, cfg, _, _ := backlogBox(t)
+	runProcess(t, fake, st, cfg, false)
+	if countFrom(fake, "SaneNews", "bk1@substack.test") != 1 {
+		t.Error("a read message inside the backlog should be filed")
+	}
+	if countFrom(fake, "INBOX", "bk2@substack.test") != 1 {
+		t.Error("a read message after the boundary must still be left alone")
+	}
+}
+
+func TestProcessBacklogStillSkipsFlaggedAndMoved(t *testing.T) {
+	fake, st, cfg, _, _ := backlogBox(t)
+	fake.Append("INBOX", newMail("flagged@substack.test", 0, "<bkflag>", func(h *mail.Header) { h.Flags = []string{`\Seen`, `\Flagged`} }))
+	// Put the flagged message inside the backlog too.
+	c, _, _ := st.Cursor(bg, "INBOX")
+	c.BacklogBelow += 5
+	_ = st.SetCursor(bg, c)
+	if _, err := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: "m:<bk1>", FromFolder: "INBOX", ToFolder: "SaneNews", Reason: "earlier", At: learnNow, Status: store.AuditDone}); err != nil {
+		t.Fatal(err)
+	}
+	runProcess(t, fake, st, cfg, false)
+	if countFrom(fake, "INBOX", "flagged@substack.test") != 1 {
+		t.Error("flagged mail was swept")
+	}
+	if countFrom(fake, "INBOX", "bk1@substack.test") != 1 {
+		t.Error("a message with an audited move was swept again")
+	}
+}
+
+func TestProcessBacklogBoundaryClearedAfterPass(t *testing.T) {
+	fake, st, cfg, _, _ := backlogBox(t)
+	runProcess(t, fake, st, cfg, false)
+	if c, _, _ := st.Cursor(bg, "INBOX"); c.BacklogBelow != 0 {
+		t.Errorf("boundary = %d, want it cleared once the cursor passed it", c.BacklogBelow)
+	}
+}
+
+func TestProcessBacklogDryRunDecidesLikeTheRealRunAndKeepsTheBoundary(t *testing.T) {
+	fake, st, cfg, _, after := backlogBox(t)
+	rep := runProcess(t, fake, st, cfg, true)
+	found := false
+	for _, m := range rep.Moves {
+		if m.Sender == "bk1@substack.test" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the dry run did not list the read backlog message")
+	}
+	if c, _, _ := st.Cursor(bg, "INBOX"); c.BacklogBelow != after {
+		t.Errorf("dry run changed the boundary: %d", c.BacklogBelow)
+	}
+}

@@ -268,9 +268,13 @@ func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *con
 		}
 		key := mail.Key(h)
 		_, already := moved[key]
+		// Mail below the backlog boundary (from `init --fresh --backlog`) is
+		// mostly already read: it is swept anyway. Flagged mail and mail that
+		// was moved before are still left alone.
+		backlog := cur.BacklogBelow != 0 && h.UID < cur.BacklogBelow
 		switch {
 		case already,
-			cfg.Run.SkipSeen && h.HasFlag(`\Seen`),
+			cfg.Run.SkipSeen && !backlog && h.HasFlag(`\Seen`),
 			cfg.Run.SkipFlagged && h.HasFlag(`\Flagged`):
 			rep.Skipped++
 			continue
@@ -301,11 +305,13 @@ func processInbox(ctx context.Context, b mail.Backend, st *store.Store, cfg *con
 	// UIDNEXT as read before the fetch also counts: everything below it was
 	// fetched, so a deleted newest message cannot leave the cursor behind the
 	// folder's end (which would look like unprocessed mail forever).
-	if next := max(maxUID+1, status.UIDNext); next > cur.NextUID {
-		cur.NextUID = next
-		if err := st.SetCursor(ctx, cur); err != nil {
-			return err
-		}
+	updated := cur
+	updated.NextUID = max(cur.NextUID, maxUID+1, status.UIDNext)
+	if updated.BacklogBelow != 0 && updated.NextUID >= updated.BacklogBelow {
+		updated.BacklogBelow = 0 // the backlog has been swept
+	}
+	if updated != cur {
+		return st.SetCursor(ctx, updated)
 	}
 	return nil
 }
