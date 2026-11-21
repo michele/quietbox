@@ -176,6 +176,25 @@ func (f *Fake) FetchFrom(_ context.Context, folder string, fromUID uint32, fn fu
 	return f.batches(all, fn)
 }
 
+func (f *Fake) FetchOne(_ context.Context, folder string, uid uint32) (mail.Header, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FetchErr != nil {
+		return mail.Header{}, false, f.FetchErr
+	}
+	if !f.hasFolder(folder) {
+		return mail.Header{}, false, fmt.Errorf("no such folder %q", folder)
+	}
+	f.ensureUIDs(folder)
+	for _, h := range f.Messages[folder] {
+		if h.UID == uid {
+			h.Folder = folder
+			return h, true, nil
+		}
+	}
+	return mail.Header{}, false, nil
+}
+
 func (f *Fake) CreateFolder(_ context.Context, name string) error {
 	if f.CreateErr != nil {
 		return f.CreateErr
