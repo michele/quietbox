@@ -380,7 +380,7 @@ func TestM3RunFilesMailAsItArrives(t *testing.T) {
 	}
 }
 
-func TestM3OnceRefusesAnotherInstance(t *testing.T) {
+func TestM3OnceTimesOutWhileLocked(t *testing.T) {
 	e := newM3Env(t)
 	e.deliverBatch()
 	// Another quietbox holds the pass lock (a `run` pass, an `undo`...) and does
@@ -421,17 +421,20 @@ func TestM3OnceWaitsForThePassLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 2.5 s leaves once a second and a half to connect and still wait the full
+	// second after which it says it is waiting.
+	start := time.Now()
 	go func() {
-		time.Sleep(1500 * time.Millisecond)
+		time.Sleep(2500 * time.Millisecond)
 		release()
 	}()
-	start := time.Now()
 	out, err := e.run("once", "--lock-timeout", "10s")
-	t.Logf("once after waiting %v:\n%s", time.Since(start).Round(10*time.Millisecond), out)
+	waited := time.Since(start)
+	t.Logf("once after waiting %v:\n%s", waited.Round(10*time.Millisecond), out)
 	if err != nil {
 		t.Fatalf("once: %v\n%s", err, out)
 	}
-	if strings.Count(out, "waiting for another quietbox...") != 1 || time.Since(start) < 1400*time.Millisecond {
+	if strings.Count(out, "waiting for another quietbox...") != 1 || waited < 2400*time.Millisecond {
 		t.Errorf("once did not wait for the lock (or did not say so):\n%s", out)
 	}
 	e.assertFiledAsExpected()
