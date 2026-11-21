@@ -10,7 +10,7 @@ or as a one-shot command from cron.
 
 - LLM classification (planned later, behind the same `classify` interface)
 - Web UI. All control happens through mail folders plus the CLI.
-- Multiple accounts per process (run one instance per account)
+- Multiple accounts per process (run one instance per account; `--account NAME` makes that easy, see M3.1)
 - Reading or storing message bodies. Headers are enough for v1.
 - Snooze and reply reminders (see "Ideas")
 
@@ -275,6 +275,25 @@ INBOX-only history should count as a learned route is something to decide from `
   the "future mail goes to Trash" behaviour is M5.
 - Verified against the Dovecot test server only (`make itest`: once, dry-run, undo, drag-back, run waking on
   delivery, lock). **Done when:** SaneBox is switched off and quietbox has run for a week. That part is not verified.
+
+### M3.1: Accounts and fresh accounts: implemented
+- Design: `docs/superpowers/specs/2026-11-21-accounts-and-fresh-design.md`; plan: `docs/superpowers/plans/2026-11-21-accounts-and-fresh.md`.
+- Multiple accounts stay **one process per account**. `--account NAME` selects `<config dir>/NAME.toml` (config dir:
+  `$XDG_CONFIG_HOME/quietbox` or `~/.config/quietbox`); it excludes an explicit `--config`. With an account the
+  password is `QUIETBOX_IMAP_PASSWORD_<NAME>` then `QUIETBOX_IMAP_PASSWORD`, and the default database is
+  `<state dir>/NAME.db`; `--config` keeps `quietbox.db`. `quietbox accounts` lists the config folder.
+- Schema v4: `meta(key, value)` holds the account identity (`username@host`, lower-case); every command that opens a
+  database binds it (`openState`): an unbound database adopts the account, another account is refused
+  (`ErrWrongAccount`, naming both and `[state] path`). `cursors.backlog_below` marks a backlog sweep.
+- `init --fresh [--backlog DUR]` (`--backlog` needs `--fresh`; `--fresh` excludes `--folder`): INBOX history teaches
+  no routes (Sent and typed folders still do) and INBOX is read only for the backlog window. The INBOX cursor starts
+  at the first message that arrived within DUR (else at the end) and `backlog_below` is the UIDNEXT read before
+  that scan. `Process` does not apply `skip_seen` below the boundary (flagged mail, audited keys and own mail are
+  still skipped) and clears the boundary once the cursor passes it. `init` moves nothing; its summary and
+  `--dry-run` state how many INBOX messages the backlog covers. Ignoring `skip_seen` for the backlog is a design
+  call, not a requirement.
+- Dovecot integration tests use throwaway users (any user with the test password gets an empty mailbox).
+- Not verified: Gmail/Fastmail. Unchanged: M3's "SaneBox off, one week" criterion.
 
 ### M4: Training via folder moves
 - snapshot diff, user-move detection, `quietbox explain`, `quietbox senders set <addr> <folder>`

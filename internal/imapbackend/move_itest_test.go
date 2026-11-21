@@ -160,15 +160,21 @@ func TestItestWaitForChangeWakesOnDelivery(t *testing.T) {
 	f := scratch(t, b, ctx)
 	done := make(chan error, 1)
 	go func() { done <- b.WaitForChange(ctx, f) }()
-	time.Sleep(700 * time.Millisecond) // let IDLE start
-	deliver(t, f)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+	// How long IDLE takes to start depends on load, and mail delivered before it
+	// starts is (by design) not reported, so keep delivering until it returns.
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		case <-deadline:
+			t.Fatal("WaitForChange did not return after repeated deliveries")
+		case <-time.After(400 * time.Millisecond):
+			deliver(t, f)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("WaitForChange did not return after a delivery")
 	}
 }
 

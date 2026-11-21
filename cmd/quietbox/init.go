@@ -17,12 +17,14 @@ import (
 )
 
 type initFlags struct {
-	since  string
-	folder string
-	dryRun bool
-	yes    bool
-	report string
-	now    string
+	since   string
+	folder  string
+	dryRun  bool
+	yes     bool
+	report  string
+	now     string
+	fresh   bool
+	backlog string
 }
 
 func newInitCmd(opts *options) *cobra.Command {
@@ -37,7 +39,13 @@ and stores the result. The only change it can make to your mailbox is creating
 configured folders that do not exist yet, and only with your confirmation.
 
 It always writes a report (default learn-report.csv) so you can review the
-result before any mail is moved. Running it again rebuilds the learned data.`,
+result before any mail is moved. Running it again rebuilds the learned data.
+
+For an account that was never managed by SaneBox or similar, use --fresh: INBOX
+history says nothing about where mail belongs, so it is not learned as routes.
+Add --backlog 30d to let the first 'quietbox once' also consider the INBOX mail
+of the last 30 days (read mail included, flagged mail excluded). init itself
+never moves anything: review with 'quietbox once --dry-run', then run 'once'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return runInit(cmd, opts, f) },
 	}
@@ -46,6 +54,8 @@ result before any mail is moved. Running it again rebuilds the learned data.`,
 	fl.StringVar(&f.folder, "folder", "", "re-learn only this configured folder (needs a previous full run)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "change nothing (no folders, no database); still prints the summary and writes the report")
 	fl.BoolVarP(&f.yes, "yes", "y", false, "create missing folders without asking")
+	fl.BoolVar(&f.fresh, "fresh", false, "account never managed before: do not learn routes from INBOX history")
+	fl.StringVar(&f.backlog, "backlog", "", "with --fresh: let 'once' also sort INBOX mail from this long ago, e.g. 30d")
 	fl.StringVar(&f.report, "report", "learn-report.csv", "where to write the CSV report (empty to skip)")
 	fl.StringVar(&f.now, "now", "", "treat this date (YYYY-MM-DD) as today; for tests and demos")
 	_ = fl.MarkHidden("now")
@@ -53,6 +63,19 @@ result before any mail is moved. Running it again rebuilds the learned data.`,
 }
 
 func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
+	var backlog time.Duration
+	switch {
+	case f.backlog != "" && !f.fresh:
+		return fmt.Errorf("--backlog requires --fresh")
+	case f.fresh && f.folder != "":
+		return fmt.Errorf("--fresh learns a whole account: it cannot be combined with --folder")
+	case f.backlog != "":
+		d, err := config.ParseDuration(f.backlog)
+		if err != nil {
+			return fmt.Errorf("--backlog: %w", err)
+		}
+		backlog = d
+	}
 	cfg, err := opts.loadConfig(false)
 	if err != nil {
 		return err
@@ -61,6 +84,8 @@ func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
 		Folder:   f.folder,
 		DryRun:   f.dryRun,
 		Yes:      f.yes,
+		Fresh:    f.fresh,
+		Backlog:  backlog,
 		Confirm:  confirmer(cmd),
 		Progress: func(msg string) { _, _ = fmt.Fprintln(cmd.ErrOrStderr(), msg) },
 	}
