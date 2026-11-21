@@ -203,3 +203,23 @@ func TestInThreadIsExported(t *testing.T) {
 		t.Error("anything else must not be")
 	}
 }
+
+func TestTrainedInboxRouteStays(t *testing.T) {
+	k := testKnowledge()
+	k.Senders["news@x.test"] = SenderRoute{Folder: "INBOX", Trained: true, Reason: "moved from SaneNews to INBOX"}
+	k.Domains["x.test"] = "SaneNews"
+	h := withListID(msg("news@x.test", "Issue 9", "list-unsubscribe", "<https://x.test/u>"), "News <news.test>")
+	d := Classify(h, k, testTargets())
+	if d.Folder != "INBOX" || d.Rule != RuleSender || !strings.Contains(d.Reason, "stays in INBOX") {
+		t.Fatalf("got %+v", d)
+	}
+}
+
+func TestTrainedFolderRouteBeatsThread(t *testing.T) {
+	k := testKnowledge()
+	k.Senders["t@x.test"] = SenderRoute{Folder: "SaneLater", Trained: true, Reason: "moved"}
+	d := Classify(withReply(msg("t@x.test", "Re: x"), "<sent-1@me.test>"), k, testTargets())
+	if d.Folder != "SaneLater" || d.Rule != RuleSender {
+		t.Fatalf("got %+v", d)
+	}
+}
