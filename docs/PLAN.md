@@ -387,7 +387,8 @@ INBOX-only history should count as a learned route is something to decide from `
     100 ms and 75 MB at 200k `messages` rows), and `messages` rows are not pruned when mail leaves a typed folder
     other than to INBOX; hundreds of moves in practice.
   - `init --since` limits what `messages` remembers, so older hand-filed mail dragged back to INBOX is not
-    recognised as a return (it is left alone, not learned).
+    recognised as a return: it has no `messages` row and no move of quietbox's, so it is not learned, and it is
+    classified like new mail and may be filed again (if unread, or any message when `skip_seen` is off).
   - a second copy with the same Message-ID and the same INTERNALDATE second, seen one pass later, reads as a
     return (rare).
   - a message present in a typed folder and in INBOX in one pass (a Gmail label without archive, Sieve
