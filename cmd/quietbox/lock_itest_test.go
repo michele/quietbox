@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -133,7 +132,9 @@ func TestLockSendersSetCompletesWhileRunIdles(t *testing.T) {
 		t.Fatalf("run did not file the new mail by the route set while it idled\n%s", out.String())
 	}
 	e.assertIn("SaneLater", "<idle-1@t>")
-	if passCount(out) <= passes {
+	// The move is visible before the daemon prints "pass done" (it still
+	// writes the audit row and cursors), so wait for the line, not just check.
+	if !waitFor(t, 10*time.Second, func() bool { return passCount(out) > passes }) {
 		t.Errorf("no run pass after the delivery: someone else filed it?\n%s", out.String())
 	}
 	stop()
@@ -207,14 +208,11 @@ func TestLockOnceAndUndoWorkWhileRunIdles(t *testing.T) {
 	if !waitFor(t, 20*time.Second, func() bool { return e.has("SaneNews", "<ou-sentinel@t>") }) {
 		t.Fatalf("run did not file the sentinel\n%s", out.String())
 	}
-	if passCount(out) <= passes {
+	if !waitFor(t, 10*time.Second, func() bool { return passCount(out) > passes }) {
 		t.Errorf("no run pass after the undo\n%s", out.String())
 	}
 	e.assertIn("INBOX", "<ou-news@t>")
 	e.assertIn("INBOX", "<ou-bulk@t>")
-	if strings.Contains(out.String(), "trained") {
-		t.Errorf("run trained on the undo:\n%s", out.String())
-	}
 	for _, addr := range []string{"writer@news.test", "store@shop.test"} {
 		if rows := e.trainingRows(addr); len(rows) != 0 {
 			t.Errorf("%s has training rows after undo: %+v", addr, rows)
@@ -223,7 +221,10 @@ func TestLockOnceAndUndoWorkWhileRunIdles(t *testing.T) {
 	if n := e.assertAuditClean(); n != 3 {
 		t.Errorf("%d move rows, want 3 (two undone, the sentinel)", n)
 	}
-	stop()
+	stop() // Run has returned: every line it will print is in out
+	if strings.Contains(out.String(), "trained") {
+		t.Errorf("run trained on the undo:\n%s", out.String())
+	}
 	t.Logf("run output:\n%s", out.String())
 }
 
@@ -238,11 +239,19 @@ func TestLockStress(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 1000)
 	var onces, sets int
+	lastRoute := "" // the route flip@ was left with by the last set/unset ("" = none)
+	// Each command gets a deadline, so a lock regression fails instead of hanging.
+	cmdCtx := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), 60*time.Second)
+	}
 	wg.Add(2)
 	go func() { // a cron gone wild: once after once
 		defer wg.Done()
 		for ctx.Err() == nil {
-			if o, err := execRoot(t, "once", "--config", e.cfg); err != nil {
+			c, done := cmdCtx()
+			o, err := execRootCtx(t, c, "once", "--config", e.cfg)
+			done()
+			if err != nil {
 				errs <- fmt.Errorf("once: %v\n%s", err, o)
 				return
 			}
@@ -253,14 +262,18 @@ func TestLockStress(t *testing.T) {
 		defer wg.Done()
 		folders := []string{"SaneLater", "SaneBulk"}
 		for i := 0; ctx.Err() == nil; i++ {
-			args := []string{"senders", "set", "flip@nowhere.test", folders[i%2]}
+			args, route := []string{"senders", "set", "flip@nowhere.test", folders[i%2]}, folders[i%2]
 			if i%3 == 2 {
-				args = []string{"senders", "unset", "flip@nowhere.test"}
+				args, route = []string{"senders", "unset", "flip@nowhere.test"}, ""
 			}
-			if o, err := execRoot(t, append(args, "--config", e.cfg)...); err != nil {
+			c, done := cmdCtx()
+			o, err := execRootCtx(t, c, append(args, "--config", e.cfg)...)
+			done()
+			if err != nil {
 				errs <- fmt.Errorf("%v: %v\n%s", args, err, o)
 				return
 			}
+			lastRoute = route
 			sets++
 		}
 	}()
@@ -284,6 +297,13 @@ func TestLockStress(t *testing.T) {
 	}
 	stop()
 	t.Logf("%d deliveries, %d once runs, %d senders set/unset, %d run passes", len(ids), onces, sets, passCount(out))
+	if passCount(out) <= 1 {
+		t.Errorf("the daemon made %d pass(es): it did no work beside the first", passCount(out))
+	}
+	// No write was lost: flip@'s route is what the last set/unset left.
+	if folder, source := e.route("flip@nowhere.test"); lastRoute == "" && source == "trained" || lastRoute != "" && (folder != lastRoute || source != "trained") {
+		t.Errorf("flip@ route is %q (%s), the last set/unset left %q", folder, source, lastRoute)
+	}
 
 	where := map[string][]string{}
 	for _, f := range mailFolders {
@@ -293,7 +313,23 @@ func TestLockStress(t *testing.T) {
 			}
 		}
 	}
-	flips := map[string]int{} // where flip@'s mail went: depends on the route at the time
+	// Where flip@'s mail went depends on the route the pass that filed it read.
+	// A pass reads the routes once, at its start, under the pass lock, and set/
+	// unset write under the same lock, so every flip@ message filed by one pass
+	// gets the same route. The set loop cycles SaneLater, SaneBulk, unset in
+	// ~10 ms steps and starves the 200 ms lock polls of once and run (the lock
+	// is not fair), so a few passes file large batches and the totals are skewed
+	// and vary from run to run (e.g. INBOX:16 SaneBulk:6 SaneLater:0). What must
+	// hold: flip@ mail is filed only by its hand-set route (the move row says so
+	// and names the folder it is in) or, with no route, stays in INBOX (it is a
+	// stranger otherwise) with no move row.
+	flipMoves := map[string]store.AuditRow{}
+	for _, r := range e.auditRows() {
+		if r.Action == store.ActionMove {
+			flipMoves[strings.TrimPrefix(r.MessageKey, "m:")] = r
+		}
+	}
+	flips := map[string]int{}
 	for i, id := range ids {
 		got := where[id]
 		if len(got) != 1 {
@@ -302,6 +338,19 @@ func TestLockStress(t *testing.T) {
 		}
 		if i%len(senders) == 3 {
 			flips[got[0]]++
+			r, moved := flipMoves[id]
+			switch got[0] {
+			case "INBOX":
+				if moved {
+					t.Errorf("%s (flip@) is in INBOX but has a move row %+v", id, r)
+				}
+			case "SaneLater", "SaneBulk":
+				if !moved || r.ToFolder != got[0] || !strings.Contains(r.Reason, "sender route to "+got[0]+" (set by hand)") {
+					t.Errorf("%s (flip@) is in %s, move row %+v: not by its hand-set route", id, got[0], r)
+				}
+			default:
+				t.Errorf("%s (flip@) is in %s: never a route it had", id, got[0])
+			}
 		}
 		want := map[int]string{0: "SaneNews", 1: "SaneBulk", 2: "INBOX"}[i%len(senders)]
 		if want != "" && got[0] != want {
@@ -346,21 +395,19 @@ func (e *m3Env) startRunProcess() (*syncBuffer, *exec.Cmd) {
 	e.t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLockRunHelperProcess$")
 	cmd.Env = append(os.Environ(), runHelperEnv+"="+e.cfg)
-	pipe, err := cmd.StdoutPipe()
-	if err != nil {
-		e.t.Fatal(err)
-	}
+	// A writer, not a pipe: exec copies the output itself and cmd.Wait
+	// returns only once it is all in out, so Wait is never racing a reader.
+	out := &syncBuffer{}
+	cmd.Stdout = out
 	if err := cmd.Start(); err != nil {
 		e.t.Fatal(err)
 	}
-	e.t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	out := &syncBuffer{}
-	go func() {
-		sc := bufio.NewScanner(pipe)
-		for sc.Scan() {
-			_, _ = out.Write([]byte(sc.Text() + "\n"))
+	e.t.Cleanup(func() {
+		if cmd.ProcessState == nil { // not reaped by kill9: kill and reap it here, once
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 		}
-	}()
+	})
 	return out, cmd
 }
 
@@ -390,6 +437,15 @@ func TestLockKilledRunLeavesNoStrandedLock(t *testing.T) {
 	}
 	kill9(t, child)
 	t.Logf("child run, killed with SIGKILL while idle:\n%s", out.String())
+	// An idle run holds only its daemon lock, so this case is about that lock:
+	// a new run starts at once. (The pass lock is free after a kill too; that
+	// is proved by the unit test TestLocksAreNotStrandedBySIGKILL, which kills
+	// a child holding both locks.)
+	newOut, stopNew := e.startRun() // fails the test unless its first pass completes
+	stopNew()
+	if strings.Contains(newOut.String(), "already running") {
+		t.Fatalf("a new run after the kill was refused:\n%s", newOut.String())
+	}
 
 	e.deliverBatch()
 	start := time.Now()
@@ -418,6 +474,9 @@ func TestLockKilledRunLeavesNoStrandedLock(t *testing.T) {
 	out, child = e.startRunProcess()
 	if !waitFor(t, 30*time.Second, func() bool { return strings.Contains(out.String(), "waiting for another quietbox") }) {
 		t.Fatalf("child run did not wait for the held pass lock\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "waiting for another quietbox... (lock file "+passLock+")") {
+		t.Errorf("the wait notice does not name the lock file:\n%s", out.String())
 	}
 	kill9(t, child)
 	release()
