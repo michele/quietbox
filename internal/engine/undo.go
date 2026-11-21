@@ -143,6 +143,11 @@ func undoOne(ctx context.Context, b mail.Backend, st *store.Store, o UndoOptions
 	if err := st.MarkUndone(ctx, r.ID); err != nil {
 		return fmt.Errorf("write audit log: %w", err)
 	}
+	// Back in INBOX, it is no longer a typed-folder message: its return must
+	// not be read as a drag back by the user.
+	if err := st.ForgetMessage(ctx, r.MessageKey); err != nil {
+		return fmt.Errorf("forget restored message: %w", err)
+	}
 	out.Status = UndoRestored
 	return nil
 }
