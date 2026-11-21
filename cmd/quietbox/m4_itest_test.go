@@ -323,41 +323,28 @@ func TestM4SendersSetAndUnset(t *testing.T) {
 		t.Errorf("writer route after learn = %s %s, want SaneNews learned", f, s)
 	}
 
-	// While `run` holds the lock, `senders set` waits for it, then completes.
-	_, stop := e.startRun()
-	setOut := &syncBuffer{}
-	setDone := make(chan error, 1)
-	go func() {
-		root := newRootCmd()
-		root.SetOut(setOut)
-		root.SetErr(setOut)
-		root.SetArgs([]string{"senders", "set", "late@nowhere.test", "SaneLater", "--config", e.cfg})
-		setDone <- root.Execute()
-	}()
-	select {
-	case err := <-setDone:
-		t.Fatalf("senders set finished while run held the lock: %v\n%s", err, setOut.String())
-	case <-time.After(1500 * time.Millisecond):
+	// While `run` is up and idle, `senders set` gets in between passes and
+	// completes at once; the same running daemon then files the sender's next
+	// mail by the new route.
+	runOut, stop := e.startRun()
+	defer stop()
+	start := time.Now()
+	setOut, err := e.run("senders", "set", "late@nowhere.test", "SaneLater")
+	t.Logf("senders set while run is up (%v):\n%s", time.Since(start).Round(10*time.Millisecond), setOut)
+	if err != nil || !strings.Contains(setOut, "late@nowhere.test -> SaneLater (trained)") {
+		t.Fatalf("senders set while run is up: %v\n%s", err, setOut)
 	}
-	if !strings.Contains(setOut.String(), "waiting for another quietbox") {
-		t.Errorf("senders set did not say it is waiting:\n%s", setOut.String())
-	}
-	stop()
-	select {
-	case err := <-setDone:
-		if err != nil {
-			t.Fatalf("senders set after run stopped: %v\n%s", err, setOut.String())
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatalf("senders set did not finish after run stopped\n%s", setOut.String())
-	}
-	t.Logf("senders set while run was up:\n%s", setOut.String())
-	if !strings.Contains(setOut.String(), "late@nowhere.test -> SaneLater (trained)") {
-		t.Errorf("senders set output:\n%s", setOut.String())
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("senders set took %v while run idled", d)
 	}
 	if f, s := e.route("late@nowhere.test"); f != "SaneLater" || s != "trained" {
 		t.Errorf("late route = %s %s, want SaneLater trained", f, s)
 	}
+	e.deliver("INBOX", "late@nowhere.test", "<late-1@t>")
+	if !waitFor(t, 20*time.Second, func() bool { return e.has("SaneLater", "<late-1@t>") }) {
+		t.Fatalf("run did not file the new mail by the route set while it ran\n%s", runOut.String())
+	}
+	e.assertIn("SaneLater", "<late-1@t>")
 }
 
 func TestM4ExplainOutput(t *testing.T) {
