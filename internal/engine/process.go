@@ -49,6 +49,10 @@ type ProcessReport struct {
 // LockPath is where the instance lock for a configuration lives.
 func LockPath(cfg *config.Config) string { return cfg.State.Path + ".lock" }
 
+// DaemonLockPath is the lock `quietbox run` holds for its whole life, apart
+// from the per-pass LockPath. Order: daemon lock first, then pass lock.
+func DaemonLockPath(cfg *config.Config) string { return LockPath(cfg) + ".run" }
+
 // Process looks at the mail that arrived since the last pass and files it.
 // It is the one code path behind `quietbox once` and `quietbox run`.
 //
