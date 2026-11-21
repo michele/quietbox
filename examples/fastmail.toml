@@ -10,6 +10,10 @@
 #   quietbox check --config examples/fastmail.toml
 #   quietbox init --dry-run --config examples/fastmail.toml
 #   quietbox once --dry-run --config examples/fastmail.toml   # after init: what would be filed
+#
+# Several accounts: save this as ~/.config/quietbox/fastmail.toml and use
+#   export QUIETBOX_IMAP_PASSWORD_FASTMAIL='...'
+#   quietbox --account fastmail check          (see also: quietbox accounts)
 
 [imap]
 host = "imap.fastmail.com"

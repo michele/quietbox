@@ -22,6 +22,9 @@ const (
 	SourceDetected = "detected"
 )
 
+// ErrWrongAccount means the database belongs to a different mail account.
+var ErrWrongAccount = errors.New("this database belongs to a different account")
+
 // ErrNotInitialised means the database file does not exist yet.
 var ErrNotInitialised = errors.New("no quietbox database yet: run `quietbox init` first")
 
@@ -202,6 +205,10 @@ type Cursor struct {
 	Folder      string
 	UIDValidity uint32
 	NextUID     uint32
+	// BacklogBelow is nonzero after `init --fresh --backlog`: messages with a
+	// lower UID are the backlog the first passes are allowed to sweep, read mail
+	// included. It is cleared once the cursor has passed it.
+	BacklogBelow uint32
 }
 
 type SenderFilter struct {
@@ -627,17 +634,17 @@ func (s *Store) MovedKeys(ctx context.Context) (map[string]struct{}, error) {
 
 // SetCursor stores or replaces a folder's cursor inside the transaction.
 func (t *Tx) SetCursor(c Cursor) error {
-	_, err := t.tx.Exec(setCursorSQL, c.Folder, c.UIDValidity, c.NextUID)
+	_, err := t.tx.Exec(setCursorSQL, c.Folder, c.UIDValidity, c.NextUID, c.BacklogBelow)
 	return err
 }
 
-const setCursorSQL = "INSERT INTO cursors(folder, uidvalidity, next_uid) VALUES (?,?,?) ON CONFLICT(folder) DO UPDATE SET uidvalidity=excluded.uidvalidity, next_uid=excluded.next_uid"
+const setCursorSQL = "INSERT INTO cursors(folder, uidvalidity, next_uid, backlog_below) VALUES (?,?,?,?) ON CONFLICT(folder) DO UPDATE SET uidvalidity=excluded.uidvalidity, next_uid=excluded.next_uid, backlog_below=excluded.backlog_below"
 
 // Cursor returns the stored cursor for a folder; ok is false when there is none.
 func (s *Store) Cursor(ctx context.Context, folder string) (Cursor, bool, error) {
 	c := Cursor{Folder: folder}
-	err := s.db.QueryRowContext(ctx, "SELECT uidvalidity, next_uid FROM cursors WHERE folder = ?", folder).
-		Scan(&c.UIDValidity, &c.NextUID)
+	err := s.db.QueryRowContext(ctx, "SELECT uidvalidity, next_uid, backlog_below FROM cursors WHERE folder = ?", folder).
+		Scan(&c.UIDValidity, &c.NextUID, &c.BacklogBelow)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, false, nil
 	}
@@ -646,7 +653,7 @@ func (s *Store) Cursor(ctx context.Context, folder string) (Cursor, bool, error)
 
 // SetCursor stores or replaces a folder's cursor.
 func (s *Store) SetCursor(ctx context.Context, c Cursor) error {
-	_, err := s.db.ExecContext(ctx, setCursorSQL, c.Folder, c.UIDValidity, c.NextUID)
+	_, err := s.db.ExecContext(ctx, setCursorSQL, c.Folder, c.UIDValidity, c.NextUID, c.BacklogBelow)
 	return err
 }
 
@@ -655,4 +662,23 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// BindAccount ties the database to one mail account (an identifier such as
+// "user@host"). An unbound database adopts it; a database bound to another
+// account is refused, so two accounts can never share state by accident.
+func (s *Store) BindAccount(ctx context.Context, account string) error {
+	var have string
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM meta WHERE key = 'account'").Scan(&have)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		_, err = s.db.ExecContext(ctx, "INSERT INTO meta(key, value) VALUES ('account', ?)", account)
+		return err
+	case err != nil:
+		return err
+	case have == account:
+		return nil
+	}
+	return fmt.Errorf("%w: it belongs to %s but this configuration is for %s; give each account its own database with [state] path (or use --account)",
+		ErrWrongAccount, have, account)
 }

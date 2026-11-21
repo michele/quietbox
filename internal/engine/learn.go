@@ -21,6 +21,14 @@ type LearnOptions struct {
 	Folder string        // re-learn only this configured folder; "" = all
 	DryRun bool          // no mailbox mutation and no database writes
 	Yes    bool          // create missing folders without asking
+	// Fresh treats the account as never managed: INBOX history says nothing
+	// about where mail belongs, so it teaches no routes (Sent and the typed
+	// folders still do) and INBOX is read only for Backlog.
+	Fresh bool
+	// Backlog (needs Fresh) makes the INBOX cursor start at the first message
+	// that arrived within this long, so the first passes of `once` consider that
+	// recent mail, read or not. Zero means only mail arriving after init.
+	Backlog time.Duration
 	// Confirm is asked before creating each missing folder when Yes is false.
 	// With neither, missing folders are skipped.
 	Confirm  func(folder string) (bool, error)
@@ -56,11 +64,14 @@ type LearnReport struct {
 	Stats   map[string]SenderStat
 	Domains []learn.DomainRoute
 
-	Scanned        int // unique messages read from configured folders
-	SentMessages   int
-	SentRecipients int
-	SkippedNoFrom  int
-	SkippedSelf    int
+	Scanned         int // unique messages read from configured folders
+	Fresh           bool
+	BacklogMessages int       // INBOX messages the first `once` will consider
+	BacklogSince    time.Time // start of the backlog window
+	SentMessages    int
+	SentRecipients  int
+	SkippedNoFrom   int
+	SkippedSelf     int
 }
 
 // Learn scans the configured folders and Sent, resolves a route per sender and
@@ -78,6 +89,10 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 	}
 	scoped := o.Folder != ""
 	switch {
+	case o.Backlog > 0 && !o.Fresh:
+		return nil, errors.New("learn: a backlog needs fresh mode (--backlog requires --fresh)")
+	case o.Fresh && scoped:
+		return nil, errors.New("learn: fresh mode learns a whole account, not one folder (--fresh cannot be combined with --folder)")
 	case !o.DryRun && st == nil:
 		return nil, errors.New("learn: a database is required unless --dry-run")
 	case scoped && st == nil:
@@ -104,7 +119,7 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 		onServer[f.Name] = true
 	}
 
-	rep := &LearnReport{Now: o.Now, DryRun: o.DryRun, Scope: o.Folder, Stats: map[string]SenderStat{}}
+	rep := &LearnReport{Now: o.Now, DryRun: o.DryRun, Scope: o.Folder, Fresh: o.Fresh, Stats: map[string]SenderStat{}}
 
 	// 1. Create missing folders (the only mutation), audit row first.
 	for _, cf := range cfg.Folders {
@@ -180,9 +195,18 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 				return nil, err
 			}
 		}
+		freshInbox := o.Fresh && cf.Name == inbox
+		if freshInbox && o.Backlog == 0 {
+			continue // nothing to learn from INBOX and no backlog to find
+		}
 		since := scanSince(cfg, cf, o)
+		if freshInbox {
+			since = o.Now.Add(-o.Backlog)
+			rep.BacklogSince = since
+		}
 		progress("scanning %s ...", cf.Name)
 		seen := map[string]struct{}{}
+		var backlogMinUID uint32
 		err := b.FetchHeaders(ctx, cf.Name, since, func(batch []mail.Header) error {
 			for _, h := range batch {
 				k := mail.Key(h)
@@ -190,6 +214,12 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 					continue // same message twice in one folder counts once
 				}
 				seen[k] = struct{}{}
+				if freshInbox { // the backlog window: counted, never learned from
+					if backlogMinUID == 0 || h.UID < backlogMinUID {
+						backlogMinUID = h.UID
+					}
+					continue
+				}
 				from := strings.ToLower(h.From)
 				switch {
 				case from == "":
@@ -204,6 +234,16 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 		})
 		if err != nil {
 			return nil, fmt.Errorf("scan %s: %w", cf.Name, err)
+		}
+		if freshInbox {
+			rep.BacklogMessages = len(seen)
+			if c, ok := cursors[cf.Name]; ok && backlogMinUID != 0 && backlogMinUID < c.NextUID {
+				c.BacklogBelow = c.NextUID // UIDNEXT read before this scan
+				c.NextUID = backlogMinUID
+				cursors[cf.Name] = c
+			}
+			progress("  %s: %d message(s) in the backlog window", cf.Name, len(seen))
+			continue
 		}
 		scanned[cf.Name] = len(seen)
 		rep.Scanned += len(seen)

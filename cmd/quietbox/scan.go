@@ -10,7 +10,6 @@ import (
 	"github.com/michele/quietbox/internal/config"
 	"github.com/michele/quietbox/internal/engine"
 	"github.com/michele/quietbox/internal/imapbackend"
-	"github.com/michele/quietbox/internal/store"
 )
 
 type scanFlags struct {
@@ -63,13 +62,13 @@ func runScan(cmd *cobra.Command, opts *options, f *scanFlags) error {
 		return fmt.Errorf("--limit: must be 0 or more, got %d", f.limit)
 	}
 
-	cfg, err := config.Load(opts.configPath)
+	cfg, err := opts.loadConfig(false)
 	if err != nil {
 		return err
 	}
 	// Check the database before dialing: there is nothing to scan against
 	// without a previous `quietbox init`, and this never creates one.
-	st, err := store.OpenExisting(cfg.State.Path)
+	st, err := openState(cmd.Context(), cfg, false)
 	if err != nil {
 		return err
 	}

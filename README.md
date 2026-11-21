@@ -190,6 +190,51 @@ Safety:
   addresses or subjects, so `undo` shows folders and the reason a message was filed.
 - Sender routes only change when you re-run `init`; learning from your own moves is M4.
 
+### Several accounts
+
+Run **one quietbox process per account**, each with its own config file, database and lock file.
+Put each account's config in the config folder (`~/.config/quietbox/`, or `$XDG_CONFIG_HOME/quietbox/`)
+as `NAME.toml` and select it with `--account`:
+
+```sh
+quietbox accounts                      # list the accounts in the config folder
+export QUIETBOX_IMAP_PASSWORD_GMAIL=...        # QUIETBOX_IMAP_PASSWORD_<NAME>, '-' becomes '_'
+quietbox --account gmail init --dry-run
+quietbox --account gmail once
+quietbox --account fastmail run
+```
+
+- `--account NAME` and `--config PATH` are alternatives (giving both is an error). Names use `a-z`, `0-9`, `-`, `_`.
+- With `--account`, the password comes from `QUIETBOX_IMAP_PASSWORD_<NAME>`, falling back to
+  `QUIETBOX_IMAP_PASSWORD`, and the default database is `<state dir>/NAME.db` (so accounts never share
+  one by default). With `--config` nothing changes: `quietbox.db` and `QUIETBOX_IMAP_PASSWORD`.
+- A database remembers which mailbox (`username@host`) it belongs to and refuses to be used for another
+  one, with a message telling you to set `[state] path`. Existing databases adopt the account that first
+  opens them.
+- For several accounts running as services, use one service per account (for example `quietbox --account gmail run`
+  in its own systemd unit or container). Service files and a Docker image come with M6.
+
+### Starting on a never-managed account
+
+An account no tool has sorted before has nothing to learn from: everything sits in INBOX because nothing
+moved it, so its INBOX history says nothing about where mail belongs. Use `--fresh`:
+
+```sh
+quietbox --account gmail init --fresh --backlog 30d --dry-run   # how much would be considered?
+quietbox --account gmail init --fresh --backlog 30d             # learn (moves nothing)
+quietbox --account gmail once --dry-run                         # review every decision
+quietbox --account gmail once                                   # sort it; `undo --since 1h` reverses
+```
+
+- `--fresh` does not learn INBOX history as sender routes. Sent (people you have written to stay in
+  INBOX) and the typed folders still count, and so do the detectors.
+- `--backlog 30d` (needs `--fresh`) lets the first `once` also consider the INBOX mail of the last 30
+  days. Backlog mail is mostly already read, so it is swept even though `skip_seen` is on; **flagged mail
+  is still left alone**, and so is anything quietbox has moved before. Without `--backlog`, only mail
+  arriving after `init` is touched, as always.
+- With no history the detectors decide alone, and quietbox does not yet learn from folders you move mail
+  into (M4), so start with a short window and read the dry run carefully.
+
 ## Development
 
 ```sh

@@ -119,9 +119,9 @@ func (e *m3Env) run(args ...string) (string, error) {
 	return execRoot(e.t, append(args, "--config", e.cfg)...)
 }
 
-// newM3Env creates the user's folders and some filing history, writes a config
-// and runs `quietbox init`, so the next mail that arrives is "new".
-func newM3Env(t *testing.T) *m3Env {
+// newBareEnv creates a throwaway user with the typed folders and a config, but
+// no mail and no `init` yet.
+func newBareEnv(t *testing.T) *m3Env {
 	t.Helper()
 	t.Setenv("QUIETBOX_IMAP_PASSWORD", "test")
 	dir := t.TempDir()
@@ -138,8 +138,15 @@ func newM3Env(t *testing.T) *m3Env {
 		}
 	}
 	done()
+	if err := os.WriteFile(e.cfg, []byte(m3Config(e.user, e.db)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
 
-	cfg := fmt.Sprintf(`
+// m3Config is a config with one folder per type for a throwaway user.
+func m3Config(user, db string) string {
+	return fmt.Sprintf(`
 [imap]
 host = "127.0.0.1"
 port = 1143
@@ -161,10 +168,15 @@ type = "newsletter"
 [[folder]]
 name = "SaneBulk"
 type = "bulk"
-`, e.user, e.db)
-	if err := os.WriteFile(e.cfg, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
+`, user, db)
+}
+
+// newM3Env creates the user's folders and some filing history, writes a config
+// and runs `quietbox init`, so the next mail that arrives is "new".
+func newM3Env(t *testing.T) *m3Env {
+	t.Helper()
+	e := newBareEnv(t)
+	dir := filepath.Dir(e.cfg)
 
 	// History: where each sender's mail has been filed so far.
 	for i := 1; i <= 3; i++ {

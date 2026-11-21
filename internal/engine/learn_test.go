@@ -521,3 +521,137 @@ func TestLearnScopedKeepsCursors(t *testing.T) {
 		t.Errorf("re-learning one folder moved the cursor: %+v -> %+v", first, got)
 	}
 }
+
+// freshMailbox is a never-managed account: everything is in INBOX, three
+// messages at 40, 20 and 5 days old, and you have written to one person.
+func freshMailbox() *mailtest.Fake {
+	return &mailtest.Fake{
+		Caps: mailtest.CapsWithMove,
+		Folders: []mail.Folder{
+			{Name: "INBOX"}, {Name: "SaneLater"}, {Name: "SaneNews"}, {Name: "SaneBulk"}, {Name: "SaneBlackHole"},
+			{Name: "Sent", Attrs: []string{`\Sent`}},
+		},
+		Messages: map[string][]mail.Header{
+			"INBOX": {
+				hdr("old@letters.test", 40, "<f1>"),
+				hdr("alice@friends.test", 20, "<f2>"),
+				hdr("news@weekly.test", 5, "<f3>"),
+			},
+			"Sent": {hdr("me@example.test", 30, "<fs1>", "alice@friends.test")},
+		},
+	}
+}
+
+func TestLearnFreshLearnsNoInboxRoutes(t *testing.T) {
+	cfg := learnConfig(t, "")
+	st := openStore(t)
+	rep, err := Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, Yes: true, Fresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fresh@substack.test is only in INBOX (alice is also in Sent, which does count).
+	if _, _, ok := routeOf(rep, "fresh@substack.test"); ok {
+		t.Error("INBOX history was learned as a route although --fresh was given")
+	}
+	if f, _, ok := routeOf(rep, "w1@substack.test"); !ok || f != "SaneNews" {
+		t.Errorf("a typed folder must still teach routes: %v %v", f, ok)
+	}
+	if rep.SentRecipients == 0 {
+		t.Error("Sent must still count")
+	}
+	if rep.Scanned == 0 {
+		t.Error("the typed folders were not scanned")
+	}
+}
+
+func TestLearnFreshWithoutBacklogDoesNotReadInbox(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := freshMailbox()
+	var read []string
+	fake.OnFetch = func(folder string) { read = append(read, folder) }
+	st := openStore(t)
+	if _, err := Learn(context.Background(), cfg, fake, st, LearnOptions{Now: learnNow, Yes: true, Fresh: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range read {
+		if f == "INBOX" {
+			t.Error("INBOX was read although there is no backlog")
+		}
+	}
+	c, ok, _ := st.Cursor(context.Background(), "INBOX")
+	if !ok || c.NextUID != 4 || c.BacklogBelow != 0 {
+		t.Errorf("cursor = %+v ok=%v, want the end of INBOX and no backlog", c, ok)
+	}
+}
+
+func TestLearnBacklogCursorAndBoundary(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := freshMailbox()
+	st := openStore(t)
+	rep, err := Learn(context.Background(), cfg, fake, st, LearnOptions{Now: learnNow, Yes: true, Fresh: true, Backlog: 30 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok, _ := st.Cursor(context.Background(), "INBOX")
+	// UIDs 1,2,3 are 40, 20 and 5 days old: the window starts at UID 2.
+	if !ok || c.NextUID != 2 || c.BacklogBelow != 4 {
+		t.Fatalf("cursor = %+v, want next 2 and boundary 4", c)
+	}
+	if rep.BacklogMessages != 2 || !rep.BacklogSince.Equal(learnNow.Add(-30*24*time.Hour)) {
+		t.Errorf("report backlog = %d since %v", rep.BacklogMessages, rep.BacklogSince)
+	}
+	if _, _, ok := routeOf(rep, "news@weekly.test"); ok {
+		t.Error("backlog messages must not teach INBOX routes")
+	}
+}
+
+func TestLearnBacklogEmptyWindow(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := freshMailbox()
+	st := openStore(t)
+	rep, err := Learn(context.Background(), cfg, fake, st, LearnOptions{Now: learnNow, Yes: true, Fresh: true, Backlog: 3 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, _ := st.Cursor(context.Background(), "INBOX")
+	if c.NextUID != 4 || c.BacklogBelow != 0 || rep.BacklogMessages != 0 {
+		t.Errorf("cursor = %+v backlog = %d, want the end of INBOX and an empty backlog", c, rep.BacklogMessages)
+	}
+}
+
+func TestLearnBacklogDryRunReportsCountWritesNothing(t *testing.T) {
+	cfg := learnConfig(t, "")
+	fake := freshMailbox()
+	st := openStore(t)
+	rep, err := Learn(context.Background(), cfg, fake, st, LearnOptions{Now: learnNow, DryRun: true, Fresh: true, Backlog: 30 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.BacklogMessages != 2 {
+		t.Errorf("dry run backlog = %d, want 2", rep.BacklogMessages)
+	}
+	if _, ok, _ := st.Cursor(context.Background(), "INBOX"); ok {
+		t.Error("dry run stored a cursor")
+	}
+	var buf bytes.Buffer
+	_ = rep.Write(&buf)
+	if !strings.Contains(buf.String(), "Backlog: 2 INBOX message(s)") || !strings.Contains(buf.String(), "quietbox once") {
+		t.Errorf("summary lacks the backlog line:\n%s", buf.String())
+	}
+}
+
+func TestLearnBacklogRequiresFreshAndFreshRefusesFolderScope(t *testing.T) {
+	cfg := learnConfig(t, "")
+	st := openStore(t)
+	_, err := Learn(context.Background(), cfg, freshMailbox(), st, LearnOptions{Now: learnNow, Backlog: time.Hour})
+	if err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Errorf("backlog without fresh: %v", err)
+	}
+	if _, err := Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Learn(context.Background(), cfg, miniMailbox(), st, LearnOptions{Now: learnNow, Fresh: true, Folder: "SaneNews"})
+	if err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Errorf("fresh with --folder: %v", err)
+	}
+}

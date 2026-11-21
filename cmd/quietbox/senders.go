@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/michele/quietbox/internal/config"
 	"github.com/michele/quietbox/internal/store"
 )
 
@@ -18,11 +17,11 @@ func newSendersCmd(opts *options) *cobra.Command {
 		Short: "List learned sender routes (reads the local database only, no IMAP connection)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.LoadOffline(opts.configPath)
+			cfg, err := opts.loadConfig(true)
 			if err != nil {
 				return err
 			}
-			st, err := store.OpenExisting(cfg.State.Path)
+			st, err := openState(cmd.Context(), cfg, false)
 			if err != nil {
 				return err
 			}

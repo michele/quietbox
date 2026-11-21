@@ -46,6 +46,13 @@ func (r *LearnReport) Write(w io.Writer) error {
 		return err
 	}
 
+	if r.Fresh {
+		fmt.Fprintln(&buf, "\nFresh account: INBOX history was not learned as routes.")
+	}
+	if r.BacklogMessages > 0 {
+		fmt.Fprintf(&buf, "Backlog: %d INBOX message(s) since %s will be considered by the first 'quietbox once' (read mail included, flagged mail excluded). Review it with 'quietbox once --dry-run' first.\n",
+			r.BacklogMessages, r.BacklogSince.Format("2006-01-02"))
+	}
 	if len(r.Created) > 0 {
 		fmt.Fprintf(&buf, "\nCreated folders: %s\n", join(r.Created))
 	}

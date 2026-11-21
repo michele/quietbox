@@ -103,6 +103,11 @@ type Config struct {
 	Run     Run      `toml:"run"`
 	State   State    `toml:"state"`
 	Folders []Folder `toml:"folder"`
+
+	// Account is the --account name this configuration was loaded for ("" when
+	// loaded by path). It only affects the password lookup and the default
+	// database path; it is never read from the file.
+	Account string `toml:"-"`
 }
 
 func defaultLearn() Learn {
@@ -118,31 +123,43 @@ func defaultLearn() Learn {
 }
 
 // Load reads and validates the config file at path.
-func Load(path string) (*Config, error) {
+func Load(path string) (*Config, error) { return LoadAccount(path, "") }
+
+// LoadAccount is Load for a named account: the password may come from
+// QUIETBOX_IMAP_PASSWORD_<NAME>, and the default database is <NAME>.db.
+func LoadAccount(path, account string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	return Parse(data, os.Getenv)
+	return ParseAccount(data, os.Getenv, account)
 }
 
 // LoadOffline is Load for commands that never connect to IMAP (e.g. `senders`):
 // everything is validated except that the password may be unset.
-func LoadOffline(path string) (*Config, error) {
+func LoadOffline(path string) (*Config, error) { return LoadAccountOffline(path, "") }
+
+// LoadAccountOffline is LoadOffline for a named account.
+func LoadAccountOffline(path, account string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	return parse(data, os.Getenv, false)
+	return parse(data, os.Getenv, account, false)
 }
 
 // Parse decodes and validates config bytes. getenv supplies the password.
 func Parse(data []byte, getenv func(string) string) (*Config, error) {
-	return parse(data, getenv, true)
+	return parse(data, getenv, "", true)
 }
 
-func parse(data []byte, getenv func(string) string, requirePassword bool) (*Config, error) {
-	cfg := Config{Learn: defaultLearn(), Run: defaultRun()}
+// ParseAccount is Parse for a named account (see LoadAccount).
+func ParseAccount(data []byte, getenv func(string) string, account string) (*Config, error) {
+	return parse(data, getenv, account, true)
+}
+
+func parse(data []byte, getenv func(string) string, account string, requirePassword bool) (*Config, error) {
+	cfg := Config{Learn: defaultLearn(), Run: defaultRun(), Account: account}
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -162,7 +179,10 @@ func parse(data []byte, getenv func(string) string, requirePassword bool) (*Conf
 		}
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
-	cfg.IMAP.Password = getenv(PasswordEnv)
+	cfg.IMAP.Password = getenv(PasswordEnvFor(account))
+	if cfg.IMAP.Password == "" && account != "" {
+		cfg.IMAP.Password = getenv(PasswordEnv)
+	}
 	cfg.applyDefaults(getenv)
 	if err := cfg.validate(requirePassword); err != nil {
 		return nil, err
@@ -187,18 +207,24 @@ func (c *Config) applyDefaults(getenv func(string) string) {
 	}
 	c.Learn.PersonalDomains = normaliseList(c.Learn.PersonalDomains)
 	if c.State.Path == "" {
-		c.State.Path = defaultStatePath(getenv)
+		c.State.Path = defaultStatePath(getenv, c.Account)
 	}
 }
 
-func defaultStatePath(getenv func(string) string) string {
+// defaultStatePath is <state dir>/quietbox.db, or <state dir>/<account>.db for a
+// named account so that accounts never share a database by default.
+func defaultStatePath(getenv func(string) string, account string) string {
+	file := "quietbox.db"
+	if account != "" {
+		file = account + ".db"
+	}
 	if dir := getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "quietbox", "quietbox.db")
+		return filepath.Join(dir, "quietbox", file)
 	}
 	if home := getenv("HOME"); home != "" {
-		return filepath.Join(home, ".local", "state", "quietbox", "quietbox.db")
+		return filepath.Join(home, ".local", "state", "quietbox", file)
 	}
-	return "quietbox.db"
+	return file
 }
 
 // normaliseList lower-cases, trims and de-duplicates, keeping first-seen order.
@@ -236,7 +262,11 @@ func (c *Config) validate(requirePassword bool) error {
 		add("imap.tls must be one of implicit, starttls, none (got %q)", c.IMAP.TLS)
 	}
 	if requirePassword && c.IMAP.Password == "" {
-		add("%s is not set", PasswordEnv)
+		if c.Account != "" {
+			add("%s (or %s) is not set", PasswordEnvFor(c.Account), PasswordEnv)
+		} else {
+			add("%s is not set", PasswordEnv)
+		}
 	}
 
 	c.validateLearn(add)

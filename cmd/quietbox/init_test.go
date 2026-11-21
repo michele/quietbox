@@ -52,3 +52,27 @@ func TestConfirmerReadsAnswers(t *testing.T) {
 		t.Errorf("prompt = %q", errOut.String())
 	}
 }
+
+func TestInitFreshFlagValidation(t *testing.T) {
+	cfg, _ := scanConfig(t) // an unreachable server: these must fail before connecting
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"backlog needs fresh", []string{"init", "--config", cfg, "--backlog", "30d"}, "--backlog requires --fresh"},
+		{"fresh excludes folder", []string{"init", "--config", cfg, "--fresh", "--folder", "SaneLater"}, "--fresh"},
+		{"bad backlog duration", []string{"init", "--config", cfg, "--fresh", "--backlog", "soon"}, "--backlog"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := execRoot(t, c.args...)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to mention %q", err, c.want)
+			}
+			if strings.Contains(err.Error(), "connect") {
+				t.Errorf("reached the network: %v", err)
+			}
+		})
+	}
+}
