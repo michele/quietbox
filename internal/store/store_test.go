@@ -495,3 +495,19 @@ func TestCursorBacklogRoundTrip(t *testing.T) {
 		t.Fatalf("Tx.SetCursor: %+v", got)
 	}
 }
+
+func TestPlannedMovesIncludesUndoMoves(t *testing.T) {
+	s := openTest(t)
+	mv, _ := s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "m:<a>", ToFolder: "News", Reason: "r", At: at(1), Status: AuditPlanned})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionMove, MessageKey: "m:<b>", ToFolder: "News", Reason: "r", At: at(2), Status: AuditDone})
+	undo, _ := s.AddAudit(ctx, AuditRow{Action: ActionUndoMove, MessageKey: "m:<c>", ToFolder: "INBOX", Reason: "r", At: at(3), Status: AuditPlanned})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionUndoMove, MessageKey: "m:<d>", ToFolder: "INBOX", Reason: "r", At: at(4), Status: AuditFailed})
+	_, _ = s.AddAudit(ctx, AuditRow{Action: ActionCreateFolder, ToFolder: "X", Reason: "r", At: at(5), Status: AuditPlanned})
+	got, err := s.PlannedMoves(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != mv || got[1].ID != undo {
+		t.Fatalf("planned = %+v, want rows %d and %d", got, mv, undo)
+	}
+}

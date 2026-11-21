@@ -42,10 +42,10 @@ type destKey struct {
 // keyFolder is a message key in a folder, for audit rows without a destination UID.
 type keyFolder struct{ key, folder string }
 
-// ownMoves indexes the done mailbox moves quietbox made itself.
+// ownMoves indexes the mailbox moves quietbox made, or may have made, itself.
 type ownMoves struct {
 	dests     map[destKey]bool
-	keyFolder map[keyFolder]bool   // rows with DestUID == 0
+	keyFolder map[keyFolder]bool   // done rows with DestUID == 0, and planned/failed rows
 	moved     map[string]time.Time // latest done, not-undone move per key
 	movedTo   map[string]string    // the folder of that move
 }
@@ -63,7 +63,17 @@ func newOwnMoves(rows []store.AuditRow) *ownMoves {
 		movedTo:   make(map[string]string),
 	}
 	for _, r := range rows {
-		if (r.Action != store.ActionMove && r.Action != store.ActionUndoMove) || !auditDone(r) {
+		if r.Action != store.ActionMove && r.Action != store.ActionUndoMove {
+			continue
+		}
+		if !auditDone(r) {
+			// planned or failed: the MOVE may still have happened (a crash, or
+			// a connection dropped after the server moved it). Its key in its
+			// destination is ours: a user move of the same message into the
+			// same folder is missed, far cheaper than a false trained route.
+			if !r.Undone {
+				o.keyFolder[keyFolder{r.MessageKey, r.ToFolder}] = true
+			}
 			continue
 		}
 		if r.DestUID != 0 {
@@ -86,7 +96,8 @@ func newOwnMoves(rows []store.AuditRow) *ownMoves {
 // explains reports whether quietbox itself put a into its folder: a done
 // move/undo_move row landed there with the same UIDVALIDITY and UID. Matching
 // on the destination, not the key, keeps a message the user drags back and
-// forth a user move. Rows without a destination UID match on key and folder.
+// forth a user move. Done rows without a destination UID, and rows whose
+// outcome was not recorded done, match on key and folder.
 func (o *ownMoves) explains(a arrival) bool {
 	return o.dests[destKey{a.Folder, a.Validity, a.H.UID}] || o.keyFolder[keyFolder{a.Key, a.Folder}]
 }
@@ -208,24 +219,32 @@ type passTraining struct {
 }
 
 // loadPassTraining reads the audit log and the remembered messages. A dry run
-// does not reconcile, so it reads a move left `planned` by a crash as the
-// reconciled row would mostly say (done, found by key in its destination):
-// otherwise the dry run would report our own move as one of yours.
+// does not reconcile, so it reads a move or undo_move left `planned` by a
+// crash as the reconciled row would mostly say (done, found by key in its
+// destination; for an undo, the original move undone and the message
+// forgotten): otherwise the dry run would report our own move as one of yours.
 func loadPassTraining(ctx context.Context, st *store.Store, dryRun bool) (*passTraining, error) {
 	audit, err := st.Audit(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if dryRun {
-		for i, r := range audit {
-			if r.Action == store.ActionMove && r.Status == store.AuditPlanned {
-				audit[i].Status, audit[i].DestUIDValidity, audit[i].DestUID = store.AuditDone, 0, 0
-			}
-		}
-	}
 	known, err := st.Messages(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if dryRun {
+		for i, r := range audit {
+			if (r.Action != store.ActionMove && r.Action != store.ActionUndoMove) || r.Status != store.AuditPlanned {
+				continue
+			}
+			audit[i].Status, audit[i].DestUIDValidity, audit[i].DestUID = store.AuditDone, 0, 0
+			if r.Action == store.ActionUndoMove {
+				if j, ok := undoTarget(audit, audit[i]); ok {
+					audit[j].Undone = true
+				}
+				delete(known, r.MessageKey)
+			}
+		}
 	}
 	return &passTraining{own: newOwnMoves(audit), known: known, last: map[string]string{}, warned: map[string]bool{}}, nil
 }

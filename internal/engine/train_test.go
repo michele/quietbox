@@ -45,13 +45,28 @@ func TestOwnMovesExplains(t *testing.T) {
 			trainArrival("INBOX", 1, 42, "a@x.com", trainT0), true},
 		{"empty status is stored as done", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Status = "" })},
 			trainArrival("SaneNews", 100, 7, "a@x.com", trainT0), true},
-		{"planned row explains nothing", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Status = store.AuditPlanned })},
-			trainArrival("SaneNews", 100, 7, "a@x.com", trainT0), false},
-		{"failed row explains nothing", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Status = store.AuditFailed })},
-			trainArrival("SaneNews", 100, 7, "a@x.com", trainT0), false},
-		{"planned row with no dest explains nothing", []store.AuditRow{with(ourMove, func(r *store.AuditRow) {
+		// A move whose outcome was not recorded `done` may still have happened
+		// (crash, or a dropped connection after the server moved it): its key
+		// in its destination is ours. A user move of the same message into the
+		// same folder is missed, which is far cheaper than a false route.
+		{"planned row explains its key in its destination", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Status = store.AuditPlanned })},
+			trainArrival("SaneNews", 100, 7, "a@x.com", trainT0), true},
+		{"failed row explains its key in its destination", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Status = store.AuditFailed })},
+			trainArrival("SaneNews", 100, 9, "a@x.com", trainT0), true},
+		{"planned row with no dest explains its key in its destination", []store.AuditRow{with(ourMove, func(r *store.AuditRow) {
 			r.Status, r.DestUIDValidity, r.DestUID = store.AuditPlanned, 0, 0
+		})}, trainArrival("SaneNews", 100, 9, "a@x.com", trainT0), true},
+		{"failed row, key matches but other folder", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Status = store.AuditFailed })},
+			trainArrival("SaneLater", 100, 9, "a@x.com", trainT0), false},
+		{"failed row, folder matches but other key", []store.AuditRow{with(ourMove, func(r *store.AuditRow) {
+			r.Status, r.MessageKey = store.AuditFailed, "m:<other@x>"
 		})}, trainArrival("SaneNews", 100, 9, "a@x.com", trainT0), false},
+		{"planned undo_move explains its key back in INBOX", []store.AuditRow{with(undoMove, func(r *store.AuditRow) {
+			r.Status, r.DestUIDValidity, r.DestUID = store.AuditPlanned, 0, 0
+		})}, trainArrival("INBOX", 1, 50, "a@x.com", trainT0), true},
+		{"failed undo_move explains its key back in INBOX", []store.AuditRow{with(undoMove, func(r *store.AuditRow) {
+			r.Status, r.DestUIDValidity, r.DestUID = store.AuditFailed, 0, 0
+		})}, trainArrival("INBOX", 1, 50, "a@x.com", trainT0), true},
 		{"create_folder row explains nothing", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.Action = store.ActionCreateFolder })},
 			trainArrival("SaneNews", 100, 7, "a@x.com", trainT0), false},
 		{"DestUID 0 falls back to key+folder", []store.AuditRow{with(ourMove, func(r *store.AuditRow) { r.DestUIDValidity, r.DestUID = 0, 0 })},

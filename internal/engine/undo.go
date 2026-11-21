@@ -93,6 +93,23 @@ func Undo(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.Sto
 	return rep, nil
 }
 
+// undoTarget finds, in the audit log, the move an undo_move row reverses: the
+// newest earlier done, not-undone move of the same key in the opposite
+// direction. ok is false when there is none.
+func undoTarget(rows []store.AuditRow, u store.AuditRow) (int, bool) {
+	found := -1
+	for i, r := range rows {
+		if r.ID >= u.ID || r.Action != store.ActionMove || !auditDone(r) || r.Undone ||
+			r.MessageKey != u.MessageKey || r.FromFolder != u.ToFolder || r.ToFolder != u.FromFolder {
+			continue
+		}
+		if found < 0 || r.ID > rows[found].ID {
+			found = i
+		}
+	}
+	return found, found >= 0
+}
+
 // undoOne reverses one move. It returns an error only when the audit log cannot
 // be written or the server cannot be asked; everything else is an outcome.
 func undoOne(ctx context.Context, b mail.Backend, st *store.Store, o UndoOptions, r store.AuditRow, out *UndoOutcome) error {

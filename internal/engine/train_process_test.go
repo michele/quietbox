@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -545,6 +547,123 @@ func TestProcessCrashedOwnMoveDoesNotTrain(t *testing.T) {
 		if len(trainedOf(rep, "crash@x.test")) != 0 {
 			t.Errorf("dry=%v: our crashed move trained: %+v", dry, rep.Trained)
 		}
+	}
+}
+
+// sendersSnapshot is every senders row, to show a pass changed no route.
+func sendersSnapshot(t *testing.T, st *store.Store) []store.SenderRow {
+	t.Helper()
+	rows, err := st.Senders(bg, store.SenderFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+func assertNothingTrained(t *testing.T, st *store.Store, rep *ProcessReport, before []store.SenderRow, senders ...string) {
+	t.Helper()
+	if len(rep.Trained) != 0 {
+		t.Errorf("trained = %+v", rep.Trained)
+	}
+	if after := sendersSnapshot(t, st); !reflect.DeepEqual(before, after) {
+		t.Errorf("senders rows changed:\nbefore %+v\nafter  %+v", before, after)
+	}
+	for _, s := range senders {
+		if tr := trainingOf(t, st, s); len(tr) != 0 {
+			t.Errorf("training rows for %s: %+v", s, tr)
+		}
+	}
+}
+
+// A MOVE that reported an error (a dropped connection) but that the server
+// carried out: the row is `failed`, and the message turns up in the folder
+// quietbox chose. That is our move, not yours.
+func TestProcessFailedMoveThatHappenedDoesNotTrain(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	fake.Append("INBOX", newsletterMail("<p2>"))
+	uid := uidOfID(t, fake, "INBOX", "<p2>")
+	fake.MoveFails = map[uint32]error{uid: errors.New("connection reset")}
+	if rep := runProcess(t, fake, st, cfg, false); rep.Failed != 1 {
+		t.Fatalf("setup: failed = %d, want 1", rep.Failed)
+	}
+	fake.MoveFails = nil
+	userMove(t, fake, "INBOX", uid, "SaneNews") // what the server really did
+	before := sendersSnapshot(t, st)
+	rep := runProcess(t, fake, st, cfg, false)
+	assertNothingTrained(t, st, rep, before, "newsletter@weekly.test")
+}
+
+// A crash mid-move of a message without a Message-ID: reconcile cannot search
+// a hash key, so the row becomes `failed`; the message in its destination is
+// still ours.
+func TestProcessCrashedHashKeyOwnMoveDoesNotTrain(t *testing.T) {
+	fake, st, cfg := processBox(t)
+	h := newMail("crash@x.test", 0, "", nil)
+	key := mail.Key(h)
+	if strings.HasPrefix(key, "m:") {
+		t.Fatalf("setup: key %q is not a hash key", key)
+	}
+	fake.Append("SaneBulk", h)
+	id, err := st.AddAudit(bg, store.AuditRow{Action: store.ActionMove, MessageKey: key, FromFolder: "INBOX", ToFolder: "SaneBulk",
+		Reason: "r", At: learnNow, Status: store.AuditPlanned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := sendersSnapshot(t, st)
+	rep := runProcess(t, fake, st, cfg, false)
+	if r := auditRow(t, st, id); r.Status != store.AuditFailed {
+		t.Errorf("row = %+v, want failed (a hash key cannot be located)", r)
+	}
+	assertNothingTrained(t, st, rep, before, "crash@x.test")
+}
+
+// `undo` killed between its MOVE and recording the outcome: the undo_move row
+// stays `planned`. Reconcile settles it (the message is back in INBOX: done,
+// the original move undone, the messages row forgotten), and the return does
+// not pin the sender. A dry run decides the same way without writing.
+func TestProcessCrashedUndoDoesNotTrain(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		t.Run(map[bool]string{true: "dry", false: "real"}[dry], func(t *testing.T) {
+			fake, st, cfg := processBox(t)
+			uid := filedNewsletter(t, fake, func() *ProcessReport { return runProcess(t, fake, st, cfg, false) })
+			runProcess(t, fake, st, cfg, false) // sees our move arrive in SaneNews
+			var orig store.AuditRow
+			audit, _ := st.Audit(bg)
+			for _, r := range audit {
+				if r.Action == store.ActionMove && r.MessageKey == "m:<n2>" {
+					orig = r
+				}
+			}
+			undoID, err := st.AddAudit(bg, store.AuditRow{Action: store.ActionUndoMove, MessageKey: "m:<n2>", FromFolder: "SaneNews", ToFolder: "INBOX",
+				Reason: "undo", At: learnNow, Status: store.AuditPlanned})
+			if err != nil {
+				t.Fatal(err)
+			}
+			back := userMove(t, fake, "SaneNews", uid, "INBOX") // the undo's MOVE happened
+			before := sendersSnapshot(t, st)
+			base := fake.MoveCount()
+			rep := runProcess(t, fake, st, cfg, dry)
+			assertNothingTrained(t, st, rep, before, "newsletter@weekly.test")
+			if fake.MoveCount() != base || len(rep.Moves) != 0 || countFrom(fake, "INBOX", "newsletter@weekly.test") != 1 {
+				t.Errorf("the restored message was moved again: %+v", rep.Moves)
+			}
+			u, o := auditRow(t, st, undoID), auditRow(t, st, orig.ID)
+			if dry {
+				if u.Status != store.AuditPlanned || o.Undone {
+					t.Errorf("dry run changed the audit log: undo=%+v orig=%+v", u, o)
+				}
+				return
+			}
+			if u.Status != store.AuditDone || u.DestUID != back {
+				t.Errorf("undo_move row = %+v, want done with dest uid %d", u, back)
+			}
+			if !o.Undone {
+				t.Errorf("original move row not marked undone: %+v", o)
+			}
+			if msgs, _ := st.Messages(bg); func() bool { _, ok := msgs["m:<n2>"]; return ok }() {
+				t.Error("the restored message still has a messages row")
+			}
+		})
 	}
 }
 

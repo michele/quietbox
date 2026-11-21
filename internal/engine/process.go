@@ -132,14 +132,17 @@ func progress(o ProcessOptions, format string, a ...any) {
 	}
 }
 
-// reconcile settles move rows left `planned` by an interrupted run: if the
-// message is in the destination folder the move happened, otherwise it did not.
-// Either way the row stays in the audit log, so the message is not moved again.
+// reconcile settles move and undo_move rows left `planned` by an interrupted
+// run or undo: if the message is in the destination folder the move happened,
+// otherwise it did not. Either way the row stays in the audit log, so the
+// message is not moved again. A settled undo also finishes what undo would
+// have done: the original move is marked undone and the message forgotten.
 func reconcile(ctx context.Context, b mail.Backend, st *store.Store, rep *ProcessReport) error {
 	planned, err := st.PlannedMoves(ctx)
 	if err != nil {
 		return err
 	}
+	var audit []store.AuditRow // loaded only for a settled undo
 	for _, r := range planned {
 		status, validity, uid := store.AuditFailed, uint32(0), uint32(0)
 		if id, ok := strings.CutPrefix(r.MessageKey, "m:"); ok {
@@ -156,6 +159,23 @@ func reconcile(ctx context.Context, b mail.Backend, st *store.Store, rep *Proces
 			}
 		}
 		if err := st.SetAuditResult(ctx, r.ID, status, validity, uid); err != nil {
+			return err
+		}
+		if r.Action != store.ActionUndoMove || status != store.AuditDone {
+			continue
+		}
+		if audit == nil {
+			if audit, err = st.Audit(ctx); err != nil {
+				return err
+			}
+		}
+		if i, ok := undoTarget(audit, r); ok {
+			if err := st.MarkUndone(ctx, audit[i].ID); err != nil {
+				return err
+			}
+			audit[i].Undone = true
+		}
+		if err := st.ForgetMessage(ctx, r.MessageKey); err != nil {
 			return err
 		}
 	}
