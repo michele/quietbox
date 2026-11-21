@@ -117,6 +117,16 @@ func writeProcessReport(w io.Writer, rep *engine.ProcessReport, dryRun bool) err
 	}
 	_, _ = fmt.Fprintf(w, "%d new, %d %s, %d stayed in INBOX, %d skipped (read, flagged or already moved once), %d failed\n",
 		rep.Fetched, len(rep.Moves)-rep.Failed, verb, rep.Stayed, rep.Skipped, rep.Failed)
+	if n := rep.TrainedSenders(); n > 0 {
+		for _, t := range rep.Trained {
+			_, _ = fmt.Fprintln(w, t.String())
+		}
+		verb := "trained"
+		if dryRun {
+			verb = "would train"
+		}
+		_, _ = fmt.Fprintf(w, "%s %d sender(s) from your moves\n", verb, n)
+	}
 	for _, warn := range rep.Warnings {
 		_, _ = fmt.Fprintf(w, "warning: %s\n", warn)
 	}
