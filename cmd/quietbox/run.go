@@ -41,6 +41,11 @@ mailbox. Every move is audited and can be reversed with 'quietbox undo'.`,
 			say("quietbox running; press Ctrl-C to stop")
 			return engine.Run(ctx, cfg, st, engine.RunOptions{
 				Connect: func(ctx context.Context) (mail.Backend, error) {
+					// Re-read the password source on every (re)connect: a rotated
+					// file or changed keychain entry needs no restart.
+					if err := cfg.RefreshPassword(ctx); err != nil {
+						return nil, err
+					}
 					return imapbackend.Dial(ctx, imapbackend.Options{
 						Host: cfg.IMAP.Host, Port: cfg.IMAP.Port, TLS: cfg.IMAP.TLS,
 						Username: cfg.IMAP.Username, Password: cfg.IMAP.Password,

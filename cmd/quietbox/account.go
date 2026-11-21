@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/michele/quietbox/internal/config"
@@ -15,6 +16,25 @@ import (
 // come from QUIETBOX_IMAP_PASSWORD_<NAME>, and the default database is NAME.db.
 // offline skips the password requirement for commands that never connect.
 func (o *options) loadConfig(offline bool) (*config.Config, error) {
+	cfg, err := o.loadConfigQuiet(offline)
+	if err != nil {
+		return nil, err
+	}
+	// Shown by every command that loads the config, not only `check`.
+	for _, w := range cfg.PasswordWarnings {
+		_, _ = fmt.Fprintf(o.errOut(), "warning: %s\n", w)
+	}
+	return cfg, nil
+}
+
+func (o *options) errOut() io.Writer {
+	if o.stderr != nil {
+		return o.stderr
+	}
+	return os.Stderr
+}
+
+func (o *options) loadConfigQuiet(offline bool) (*config.Config, error) {
 	if o.account == "" {
 		if offline {
 			return config.LoadOffline(o.configPath)
