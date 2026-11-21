@@ -15,6 +15,12 @@ import (
 // needed) so that two quietbox instances never act on one mailbox at once. The
 // lock is released by the returned function, or by the OS if the process dies.
 func AcquireLock(path string) (release func(), err error) {
+	return acquireNow(path, "another quietbox is already running on this mailbox (lock file %s): wait for it or stop it first")
+}
+
+// acquireNow is the fail-fast flock; busyFmt is the error for a held lock and
+// takes the path.
+func acquireNow(path, busyFmt string) (release func(), err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lock file: %w", err)
@@ -22,7 +28,7 @@ func AcquireLock(path string) (release func(), err error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another quietbox is already running on this mailbox (lock file %s): wait for it or stop it first", path)
+			return nil, fmt.Errorf(busyFmt, path)
 		}
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
@@ -44,21 +50,7 @@ const (
 // the kernel when the process exits, however it exits (kill -9 included):
 // nothing is written to the file, and its existence means nothing.
 func AcquireDaemonLock(path string) (release func(), err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open lock file: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("another quietbox run is already running on this mailbox (lock file %s)", path)
-		}
-		return nil, fmt.Errorf("lock %s: %w", path, err)
-	}
-	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-	}, nil
+	return acquireNow(path, "another quietbox run is already running on this mailbox (lock file %s)")
 }
 
 // AcquireLockWait is AcquireLock that waits for the lock instead of failing:
@@ -114,6 +106,9 @@ func acquireLockPoll(ctx context.Context, path string, timeout time.Duration, on
 			return nil, ctx.Err()
 		case <-expired:
 			_ = f.Close()
+			if err := ctx.Err(); err != nil { // cancellation wins over a simultaneous timeout
+				return nil, err
+			}
 			return nil, fmt.Errorf("another quietbox is still running on this mailbox after waiting %s (lock file %s)", timeout, path)
 		case <-time.After(lockPoll):
 		}

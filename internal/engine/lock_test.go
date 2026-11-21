@@ -240,6 +240,23 @@ func TestAcquireLockTimeoutCancel(t *testing.T) {
 	}
 }
 
+func TestAcquireLockTimeoutCancelWinsOverTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.db.lock")
+	held, err := AcquireLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ {
+		_, err = AcquireLockTimeout(ctx, path, time.Nanosecond, nil)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("run %d: err = %v, want context.Canceled", i, err)
+		}
+	}
+}
+
 const lockHelperEnv = "QUIETBOX_LOCK_HELPER_DIR"
 
 // TestLockHelperProcess is not a test: the SIGKILL test re-executes the test
@@ -250,12 +267,18 @@ func TestLockHelperProcess(t *testing.T) {
 	if dir == "" {
 		t.Skip("helper process only")
 	}
-	if _, err := AcquireDaemonLock(filepath.Join(dir, "q.db.lock.run")); err != nil {
+	// Keep the release closures (and so the open files) alive until the end,
+	// so no finalizer can close a descriptor and drop a flock early.
+	relDaemon, err := AcquireDaemonLock(filepath.Join(dir, "q.db.lock.run"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := AcquireLock(filepath.Join(dir, "q.db.lock")); err != nil {
+	defer relDaemon()
+	relPass, err := AcquireLock(filepath.Join(dir, "q.db.lock"))
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer relPass()
 	_, _ = os.Stdout.WriteString("locked\n")
 	time.Sleep(time.Minute)
 }
@@ -299,10 +322,14 @@ func TestLocksAreNotStrandedBySIGKILL(t *testing.T) {
 	if r, err := AcquireDaemonLock(daemon); err == nil {
 		r()
 		t.Fatal("daemon lock acquired while the child holds it")
+	} else if !strings.Contains(err.Error(), "another quietbox") {
+		t.Fatalf("daemon lock: unexpected error %v", err)
 	}
 	if r, err := AcquireLock(pass); err == nil {
 		r()
 		t.Fatal("pass lock acquired while the child holds it")
+	} else if !strings.Contains(err.Error(), "another quietbox") {
+		t.Fatalf("pass lock: unexpected error %v", err)
 	}
 
 	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
