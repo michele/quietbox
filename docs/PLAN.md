@@ -251,8 +251,8 @@ INBOX-only history should count as a learned route is something to decide from `
   UIDNEXT *before* the scan so mail arriving during `init` is not lost. `once`/`run` fetch only `UID >= cursor`.
   If UIDVALIDITY changed, nothing moves from that folder: the cursor is reset and the user is told to re-run `init`.
   (Typed folders got cursors in M4, see there.) Both commands refuse to run before `init`.
-- **One pass (`engine.Process`)**, shared by `once` and `run`: lock file (`<state path>.lock`, flock, Unix only;
-  `--dry-run` takes none) -> require `MOVE` + `UIDPLUS` -> settle `planned` audit rows left by a crash (found in
+- **One pass (`engine.Process`)**, shared by `once` and `run`: pass lock (`<state path>.lock`, flock, Unix only;
+  `--dry-run` takes none; see M4.1 for how `run` holds it) -> require `MOVE` + `UIDPLUS` -> settle `planned` audit rows left by a crash (found in
   the destination by Message-ID -> `done`, else `failed`) -> check UIDVALIDITY -> Sent (new recipients and
   Message-IDs are added, never replaced; a dry run applies them in memory only, so it decides like the real run)
   -> INBOX.
@@ -269,14 +269,15 @@ INBOX-only history should count as a learned route is something to decide from `
   both (run `quietbox check`); Outlook may also need OAuth2, which is unsupported.
 - **`run`.** `Process`, then IDLE (re-issued every 20 min), repeated; a connection error closes the connection and
   reconnects with backoff (5s doubling to 5 min, reset by a clean pass). Refusals (no MOVE, no `init`, lock held,
-  no Sent folder) are fatal. SIGINT/SIGTERM stop it after the current pass. It holds the lock for its lifetime, so
-  `once` and `undo` while `run` is up fail with "another quietbox". Before every wait it compares the folder's
+  no Sent folder) are fatal. SIGINT/SIGTERM stop it after the current pass. Since M4.1 it holds its own daemon lock
+  for its lifetime (a second `run` is refused) and the pass lock only while a pass executes, so `once` and `undo`
+  work while it idles. Before every wait it compares the folder's
   UIDNEXT with the cursor and goes round again if mail arrived since the pass looked (the server would not announce
   it twice); the cursor therefore never ends a pass below the UIDNEXT read at its start.
 - **`undo --since <duration> [--dry-run]`.** Takes `done`, not-undone moves in the window, newest first, finds each
   message by (UIDVALIDITY, UID) from COPYUID, or by Message-ID if UIDVALIDITY changed (hash keys cannot be searched:
   reported as unfindable), writes an `undo_move` row first, moves it back and marks the original undone. A message
-  you moved yourself is skipped and reported. Takes the lock.
+  you moved yourself is skipped and reported. Takes the pass lock (waiting at most `--lock-timeout`, M4.1).
 - **State.** Schema v3: `audit.status` (`planned|done|failed`), `audit.dest_uidvalidity`, `audit.dest_uid`, and
   `cursors(folder, uidvalidity, next_uid)`. The audit log holds keys, folders and reasons, never addresses or subjects.
 - Message keys are still Message-ID then hash: go-imap v2 (beta.9) cannot fetch EMAILID.
@@ -365,9 +366,9 @@ INBOX-only history should count as a learned route is something to decide from `
   a `manual` training row; the folder must be a configured folder (INBOX allowed, Sent not) and the address must
   contain `@`, both checked before waiting for the lock. `unset` deletes a
   trained row only; a learned route the training had replaced comes back at the next `init`/`learn`, not before.
-  Both work on the database (no IMAP login) and **wait for the instance lock** ("waiting for another quietbox..."
-  after a second, Ctrl-C stops waiting) instead of failing. Because `run` holds the lock for its whole lifetime,
-  while a daemon is up they wait until it stops: stop `run`, set, start it again.
+  Both work on the database (no IMAP login) and **wait for the pass lock** ("waiting for another quietbox..."
+  after a second, Ctrl-C stops waiting) instead of failing. Since M4.1 `run` holds that lock only while a pass
+  executes, so with a daemon up they wait at most one pass, and its next pass uses the new route.
 - **`explain [--folder F] <uid | message-id>`.** Opens the folder read-only (default INBOX), fetches that one
   message's headers and prints what `Classify` would decide *now*: decision, rule, reason, signals, the sender's
   route and source, its latest training event and the audit rows for the message key. Sender address, UID and
@@ -376,7 +377,7 @@ INBOX-only history should count as a learned route is something to decide from `
 - No config switch turns training off (on purpose); `senders unset` is the escape hatch.
 - **State.** Schema v5: `messages(key, folder, internal_date)`, `training(...)`, cursors for typed folders.
 - Verified against the Dovecot test server only (`make itest`: filing by hand trains, drag back keeps the sender in
-  INBOX, `undo` is not training, `senders set`/`unset` including `set` waiting while `run` is up, `explain`
+  INBOX, `undo` is not training, `senders set`/`unset` including `set` while `run` is up (M4.1), `explain`
   output without the subject, `run` learning from a move on the next delivery) and a manual demo.
 - **Not verified:**
   - real Fastmail or Gmail. That INTERNALDATE is preserved on MOVE (which return detection relies on) is verified
@@ -393,8 +394,46 @@ INBOX-only history should count as a learned route is something to decide from `
     return (rare).
   - a message present in a typed folder and in INBOX in one pass (a Gmail label without archive, Sieve
     `fileinto :copy`) trains twice and ends "stays in INBOX", with a "moves disagreed" note.
-  - `set`/`unset` contention with `run` beyond the one integration test; the M3-database upgrade path on a real
-    mailbox (unit-tested with the fake backend only).
+  - the M3-database upgrade path on a real mailbox (unit-tested with the fake backend only).
+
+### M4.1: `run` releases the lock between passes: implemented
+- Design: `docs/superpowers/specs/2026-11-21-run-idle-lock-design.md`; plan: `docs/superpowers/plans/2026-11-21-run-idle-lock.md`.
+- **Two locks, one order.** The daemon lock `<state path>.lock.run` is taken only by `run`, at start, fail-fast
+  ("another quietbox run is already running on this mailbox (lock file ...)"), and held until it exits. The pass
+  lock `<state path>.lock` (`LockPath`) is taken by `run` around each `Process` pass (waiting for it, never failing)
+  and by `once`, `undo`, real `init`/`learn` and `senders set`/`unset`. Order: daemon lock, then pass lock; nothing
+  takes them the other way round. The pass lock is never held across the IDLE wait, the "mail waiting?" check or a
+  reconnect backoff. Dry runs, `scan`, `eval`, `explain`, `check` and `senders` (list) take no lock.
+- **Why there is no race.** Every pass re-reads its state from SQLite (routes, cursors, audit log, `messages`), so
+  what another command did in the gap is seen. Moves made by `once`/`undo` in the gap are explained by their audit
+  rows (destination UID; `undo_move` rows), so the daemon neither moves a message twice nor trains on them.
+  `reconcile` of `planned` rows runs under the pass lock. SQLite is in WAL mode with a 5 s busy timeout, so the
+  daemon's unlocked UIDNEXT-vs-cursor read never conflicts with a writer.
+- **Waiting.** `once`, `undo` and `init`/`learn` wait at most `--lock-timeout` (default `2m`, `engine.DefaultLockTimeout`;
+  Go durations such as `90s`, `2m`, `1m30s`, and the config notation `1h`, `1d`; must be positive), print
+  "waiting for another quietbox..." once after a second, then fail with "another quietbox is still running on this
+  mailbox after waiting <d> (lock file ...)". A dry run never waits. `senders set`/`unset` wait without a bound
+  (Ctrl-C). `run` waits for the pass lock with its signal context (SIGINT/SIGTERM stop it while waiting) and says
+  "waiting for another quietbox..." once per wait.
+- **Real `init`/`learn` hold the pass lock for the whole call**, including the interactive "create folders?" question
+  and a long full scan. Meanwhile a daemon's passes and `senders set` wait, and a cron `once` can time out. The README
+  recommends `--yes` or stopping `run` for a big `init`.
+- **Process death.** `flock(2)` locks belong to the open file and the kernel drops them when the process exits for
+  any reason (`kill -9` included). No PID files, timestamps or liveness checks; the empty lock files left on disk are
+  harmless. `[state] path` should be on a local filesystem: `flock` on network filesystems can be unreliable.
+- Verified: unit tests (daemon lock fail-fast, bounded wait and cancel, a child process holding both locks killed with
+  SIGKILL, `run` holding no pass lock while idle) and Dovecot integration tests (`make itest`: `senders set` completes
+  while `run` idles and the same daemon files the next delivery by the new route; a second `run` refused; `once` and
+  `undo` while `run` idles, one `move` audit row per message, the daemon neither re-files nor trains on the undo; a
+  5 s stress of `run` + a `once` loop + a `senders set`/`unset` loop + deliveries under `-race`: every message in
+  exactly one folder, no key moved twice, no `planned` row; the real `run` in a child process killed with SIGKILL
+  while idle and while waiting for the pass lock, after which `once` and a new `run` start at once) and a manual demo.
+- **Not verified:**
+  - `flock` behaviour on network filesystems (NFS, SMB); documented as unsupported, not detected.
+  - the kill -9 tests are Unix-only (like the locks); a kill in the middle of a pass is not tested end to end (a
+    pass interrupted by a crash is settled by `reconcile`, M3). Windows remains unsupported.
+  - lock fairness: the pass lock is polled every 200 ms, so a tight loop of lock takers (the stress test's
+    `senders set` loop) can delay a waiting `once`; it is bounded by `--lock-timeout`.
 
 ### M5: BlackHole
 - `blackhole` folder type: move a message there to block the sender
