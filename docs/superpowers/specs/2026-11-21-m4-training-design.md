@@ -68,9 +68,13 @@ folders**, INBOX. Typed folders come before INBOX classification.
    Each fetched message is an *arrival*. Skip it if the audit log explains it (below) or if its
    From is one of your own addresses or unparseable. Otherwise it is a **file event**: sender ->
    this folder.
-2. **INBOX.** Each fetched message whose key is in `messages` with a typed-folder `folder`, or
-   whose key has a `move` audit row (any status, not undone) and whose arrival the log does not
-   explain, is a **return event**: sender -> INBOX. Return events are handled before the `skip_seen`
+2. **INBOX.** Each fetched message whose key is in `messages` (so it was last seen in a typed
+   folder) and whose INTERNALDATE is **not after** the date stored there, or whose key has a
+   `done`, not-undone `move` audit row made at or after the message's INTERNALDATE (fallback for
+   databases without `messages` rows), and whose arrival the log does not explain, is a
+   **return event**: sender -> INBOX. A move keeps INTERNALDATE, a fresh delivery does not, so a
+   second copy of an already-filed message (same Message-ID, delivered later, e.g. a list
+   cross-post) is ordinary new mail and never pins the sender. Return events are handled before the `skip_seen`
    / `skip_flagged` checks, because a dragged-back message is usually already read. The message
    is never classified or moved. All other INBOX mail is classified as in M3.
 3. **Apply.** File and return events update `k.Senders` in memory (so step 2's classification
@@ -99,9 +103,10 @@ leaves messages with `d.Folder == inbox` alone. What is new:
 
 - `cursors` rows for every configured typed folder, created by `init` (UIDNEXT read before the
   scan, as for INBOX and Sent).
-- `messages(key PRIMARY KEY, folder, last_seen)`: filled by the `init`/`learn` header scan of
-  typed folders (it already fetches the headers), by our own moves, and by arrivals. An INBOX
-  arrival updates it too. No subjects or addresses.
+- `messages(key PRIMARY KEY, folder, internal_date)`: the typed-folder messages quietbox knows
+  about, filled by the `init`/`learn` header scan of typed folders (it already fetches the
+  headers), by our own moves, and by typed-folder arrivals. A message that returns to INBOX
+  (or is restored by `undo`) has its row deleted. No subjects or addresses.
 - `training(id, at, sender, folder, source, message_key)`: `source` is `move` or `manual`;
   `folder` is the new route (INBOX name for "stays"). One row per event, for `explain`.
 - `senders.reason` for a trained row says what trained it ("moved from INBOX to Newsletters on
