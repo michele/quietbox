@@ -215,8 +215,9 @@ never train. A message arriving in INBOX counts as "moved back" only if it was l
 configured folder and keeps its original arrival date (a move does, a fresh delivery does not).
 Training changes only the local database, never the mailbox.
 
-- `run` waits (IDLE) on INBOX only. A move into another folder is noticed at the next pass, which the
-  next INBOX delivery triggers.
+- `run` waits (IDLE) on INBOX only. A move into another folder is noticed at the next pass, which
+  comes with the next INBOX delivery, a drag back to INBOX (the new message wakes `run` too), or at
+  the latest 20 minutes later (the IDLE refresh).
 - A later copy (same Message-ID, delivered again) of any message quietbox has seen in a configured
   folder, whether it filed the message or `init` saw it there, stays in INBOX untouched (not
   classified) and teaches nothing.

@@ -324,8 +324,8 @@ INBOX-only history should count as a learned route is something to decide from `
 ### M4: Training via folder moves: implemented
 - Design: `docs/superpowers/specs/2026-11-21-m4-training-design.md`; plan: `docs/superpowers/plans/2026-11-21-m4-training.md`.
 - **Arrivals only.** No snapshot diff and no departures: `init` gives every configured typed folder a cursor
-  (UIDNEXT read before the scan, as for INBOX), and each pass fetches only `UID >= cursor` (not at all when the folder's UIDNEXT has not passed the cursor). Pass order: lock, MOVE
-  check, reconcile, Sent, **typed folders** (config order), INBOX. Training runs before INBOX classification, so
+  (UIDNEXT read before the scan, as for INBOX), and each pass fetches only `UID >= cursor` (not at all when the
+  folder's UIDNEXT has not passed the cursor). Pass order: lock, MOVE check, reconcile, Sent, **typed folders** (config order), INBOX. Training runs before INBOX classification, so
   the mail that wakes `run` is already filed by what you just taught it.
 - **File event.** A message that arrives in a typed folder re-routes its sender there (`route_source = trained`),
   unless quietbox put it there itself, or it is from one of your own addresses, or it has no parseable From. A
@@ -378,10 +378,22 @@ INBOX-only history should count as a learned route is something to decide from `
 - Verified against the Dovecot test server only (`make itest`: filing by hand trains, drag back keeps the sender in
   INBOX, `undo` is not training, `senders set`/`unset` including `set` waiting while `run` is up, `explain`
   output without the subject, `run` learning from a move on the next delivery) and a manual demo.
-- **Not verified:** real Fastmail or Gmail; hundreds of moves
-  in practice (the audit log is read whole once per pass, fine at expected sizes); `set`/`unset` contention with
-  `run` beyond the one integration test; the M3-database upgrade path on a real mailbox (unit-tested with the fake
-  backend only).
+- **Not verified:**
+  - real Fastmail or Gmail. That INTERNALDATE is preserved on MOVE (which return detection relies on) is verified
+    on Dovecot only; on Gmail/Fastmail it is unverified.
+  - duplicate-copy behaviour (a later copy of a known message stays in INBOX) is unit-tested with the fake backend
+    only.
+  - scale: the audit log and the whole `messages` table are read once per pass (measured by the reviewer: about
+    100 ms and 75 MB at 200k `messages` rows), and `messages` rows are not pruned when mail leaves a typed folder
+    other than to INBOX; hundreds of moves in practice.
+  - `init --since` limits what `messages` remembers, so older hand-filed mail dragged back to INBOX is not
+    recognised as a return (it is left alone, not learned).
+  - a second copy with the same Message-ID and the same INTERNALDATE second, seen one pass later, reads as a
+    return (rare).
+  - a message present in a typed folder and in INBOX in one pass (a Gmail label without archive, Sieve
+    `fileinto :copy`) trains twice and ends "stays in INBOX", with a "moves disagreed" note.
+  - `set`/`unset` contention with `run` beyond the one integration test; the M3-database upgrade path on a real
+    mailbox (unit-tested with the fake backend only).
 
 ### M5: BlackHole
 - `blackhole` folder type: move a message there to block the sender
