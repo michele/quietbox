@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/michele/quietbox/internal/config"
 	"github.com/michele/quietbox/internal/mail"
@@ -456,7 +457,7 @@ func TestProcessFailsWhenLockedButDryRunDoesNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	if _, err := Process(bg, cfg, fake, st, ProcessOptions{Now: learnNow}); err == nil || !strings.Contains(err.Error(), "another quietbox") {
+	if _, err := Process(bg, cfg, fake, st, ProcessOptions{Now: learnNow, LockTimeout: 300 * time.Millisecond}); err == nil || !strings.Contains(err.Error(), "another quietbox") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(fake.Moves) != 0 {

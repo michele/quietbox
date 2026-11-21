@@ -73,9 +73,7 @@ func newSendersCmd(opts *options) *cobra.Command {
 // lockedState waits for the instance lock (a running `quietbox run` holds it
 // until it stops) and opens the existing state. The returned func releases both.
 func lockedState(cmd *cobra.Command, cfg *config.Config) (*store.Store, func(), error) {
-	release, err := engine.AcquireLockWait(cmd.Context(), engine.LockPath(cfg), func() {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "waiting for another quietbox...")
-	})
+	release, err := engine.AcquireLockWait(cmd.Context(), engine.LockPath(cfg), lockWaitNotice(cmd))
 	if err != nil {
 		return nil, nil, err
 	}

@@ -14,6 +14,7 @@ import (
 func newUndoCmd(opts *options) *cobra.Command {
 	var since string
 	var dryRun bool
+	var lockWait string
 	cmd := &cobra.Command{
 		Use:   "undo --since <duration>",
 		Short: "Move back what quietbox filed recently",
@@ -21,7 +22,8 @@ func newUndoCmd(opts *options) *cobra.Command {
 first, by moving each message from the folder quietbox put it in back to where it
 came from. Nothing is deleted. A message that is no longer where quietbox put it
 (you moved it yourself) is left alone and reported. Restored messages are never
-filed away again.`,
+filed away again. While another quietbox works on the same mailbox it waits for
+it, at most --lock-timeout, then fails.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if since == "" {
@@ -31,6 +33,10 @@ filed away again.`,
 			if err != nil {
 				return fmt.Errorf("--since: %w", err)
 			}
+			timeout, err := parseLockTimeout(lockWait)
+			if err != nil {
+				return err
+			}
 			cfg, st, b, err := openMailbox(cmd, opts)
 			if err != nil {
 				return err
@@ -38,7 +44,9 @@ filed away again.`,
 			defer func() { _ = st.Close() }()
 			defer func() { _ = b.Close() }()
 
-			rep, err := engine.Undo(cmd.Context(), cfg, b, st, engine.UndoOptions{Since: d, DryRun: dryRun})
+			rep, err := engine.Undo(cmd.Context(), cfg, b, st, engine.UndoOptions{
+				Since: d, DryRun: dryRun, LockTimeout: timeout, OnLockWait: lockWaitNotice(cmd),
+			})
 			if rep != nil {
 				if werr := writeUndoReport(cmd.OutOrStdout(), rep, dryRun); werr != nil && err == nil {
 					err = werr
@@ -52,6 +60,7 @@ filed away again.`,
 	}
 	cmd.Flags().StringVar(&since, "since", "", "undo moves made within this long ago, e.g. 1h, 2d (required)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be restored; change nothing")
+	addLockTimeoutFlag(cmd, &lockWait)
 	return cmd
 }
 

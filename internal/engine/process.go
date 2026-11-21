@@ -19,6 +19,12 @@ type ProcessOptions struct {
 	DryRun   bool      // report what would move; write nothing, move nothing, take no lock
 	LockHeld bool      // the caller already holds the instance lock (the run loop does)
 	Progress func(msg string)
+	// LockTimeout bounds the wait for the pass lock when Process takes it
+	// itself (not with LockHeld, never in a dry run); zero means
+	// DefaultLockTimeout. OnLockWait, if set, is called once after a second
+	// of waiting.
+	LockTimeout time.Duration
+	OnLockWait  func()
 }
 
 // Move statuses in a ProcessReport.
@@ -46,6 +52,25 @@ type ProcessReport struct {
 	Notes    []string       // information only, e.g. training starting on a folder
 }
 
+// DefaultLockTimeout is how long `once`, `undo` and `init` wait for the pass
+// lock (held by a `run` pass, or another command) before giving up. It is
+// bounded so that a hung process cannot queue up an endless pile of cron jobs.
+const DefaultLockTimeout = 2 * time.Minute
+
+// lockTimeout is d, or DefaultLockTimeout when d is not positive.
+func lockTimeout(d time.Duration) time.Duration {
+	if d <= 0 {
+		return DefaultLockTimeout
+	}
+	return d
+}
+
+// acquirePassLock waits, at most timeout (zero: DefaultLockTimeout), for the
+// pass lock. ctx cancellation ends the wait at once.
+func acquirePassLock(ctx context.Context, cfg *config.Config, timeout time.Duration, onWait func()) (release func(), err error) {
+	return AcquireLockTimeout(ctx, LockPath(cfg), lockTimeout(timeout), onWait)
+}
+
 // LockPath is where the instance lock for a configuration lives.
 func LockPath(cfg *config.Config) string { return cfg.State.Path + ".lock" }
 
@@ -69,7 +94,7 @@ func Process(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.
 		return nil, store.ErrNotInitialised
 	}
 	if !o.DryRun && !o.LockHeld {
-		release, err := AcquireLock(LockPath(cfg))
+		release, err := acquirePassLock(ctx, cfg, o.LockTimeout, o.OnLockWait)
 		if err != nil {
 			return nil, err
 		}

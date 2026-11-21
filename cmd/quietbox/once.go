@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -37,8 +38,41 @@ func openMailbox(cmd *cobra.Command, opts *options) (*config.Config, *store.Stor
 	return cfg, st, b, nil
 }
 
+// defaultLockTimeout is the --lock-timeout default of once, undo and init
+// (engine.DefaultLockTimeout, in the flag's own notation).
+const defaultLockTimeout = "2m"
+
+// addLockTimeoutFlag adds --lock-timeout to a command that waits for the pass
+// lock (held by a `run` pass or another command) before changing anything.
+func addLockTimeoutFlag(cmd *cobra.Command, v *string) {
+	cmd.Flags().StringVar(v, "lock-timeout", defaultLockTimeout,
+		"how long to wait for another quietbox on this mailbox, e.g. 30s, 2m, 1h")
+}
+
+// parseLockTimeout reads --lock-timeout: a Go duration (30s, 2m, 1m30s) or
+// the config notation (1h, 1d). It must be positive.
+func parseLockTimeout(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		if d, err = config.ParseDuration(s); err != nil {
+			return 0, fmt.Errorf("--lock-timeout: invalid duration %q (want e.g. 30s, 2m, 1h)", s)
+		}
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("--lock-timeout must be positive, got %q", s)
+	}
+	return d, nil
+}
+
+// lockWaitNotice is the onWait callback of every command that waits for the
+// pass lock: one line on stderr, after a second of waiting.
+func lockWaitNotice(cmd *cobra.Command) func() {
+	return func() { _, _ = fmt.Fprintln(cmd.ErrOrStderr(), "waiting for another quietbox...") }
+}
+
 func newOnceCmd(opts *options) *cobra.Command {
 	var dryRun bool
+	var lockWait string
 	cmd := &cobra.Command{
 		Use:   "once",
 		Short: "File the mail that arrived since the last run, then exit (for cron)",
@@ -47,9 +81,16 @@ moves what the classifier files elsewhere, and exits. Every move is written to t
 audit log before it happens and can be reversed with 'quietbox undo'. Mail you have
 already read or flagged is left alone (see [run] in the config).
 
+While another quietbox works on the same mailbox (a 'run' pass, 'undo', 'init')
+it waits for it, at most --lock-timeout, then fails. A dry run never waits.
+
 With --dry-run it prints what it would do and changes nothing.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			timeout, err := parseLockTimeout(lockWait)
+			if err != nil {
+				return err
+			}
 			cfg, st, b, err := openMailbox(cmd, opts)
 			if err != nil {
 				return err
@@ -57,7 +98,7 @@ With --dry-run it prints what it would do and changes nothing.`,
 			defer func() { _ = st.Close() }()
 			defer func() { _ = b.Close() }()
 
-			po := engine.ProcessOptions{DryRun: dryRun}
+			po := engine.ProcessOptions{DryRun: dryRun, LockTimeout: timeout, OnLockWait: lockWaitNotice(cmd)}
 			if opts.verbose {
 				po.Progress = func(msg string) { _, _ = fmt.Fprintln(cmd.ErrOrStderr(), msg) }
 			}
@@ -74,6 +115,7 @@ With --dry-run it prints what it would do and changes nothing.`,
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would move; change nothing")
+	addLockTimeoutFlag(cmd, &lockWait)
 	return cmd
 }
 

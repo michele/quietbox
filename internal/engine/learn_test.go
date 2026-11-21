@@ -49,6 +49,9 @@ type = "blackhole"
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A real Learn takes the pass lock next to the state path: keep it in a
+	// throwaway directory, never under the home directory.
+	cfg.State.Path = filepath.Join(t.TempDir(), "q.db")
 	return cfg
 }
 
