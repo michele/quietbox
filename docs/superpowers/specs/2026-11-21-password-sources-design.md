@@ -26,7 +26,7 @@ OS keychain libraries (no new dependency; `password_command` covers it), OAuth2,
 - Both set is a config error. Neither set: `QUIETBOX_IMAP_PASSWORD_<NAME>` / `QUIETBOX_IMAP_PASSWORD` as before.
 - Permissions: `mode & 077 != 0` on the file is a hard error outside a container ("chmod 600 PATH"). Inside a container
   it is a warning printed to stderr by **every** command that loads the config.
-- Container detection: `QUIETBOX_CONTAINER` set to a non-empty value other than `0`, or `KUBERNETES_SERVICE_HOST`
+- Container detection: `QUIETBOX_CONTAINER` = `0` (forces "not a container") or any other non-empty value (forces "container"); otherwise `KUBERNETES_SERVICE_HOST`
   set, or `/.dockerenv` or `/run/.containerenv` exists. It is a heuristic; `QUIETBOX_CONTAINER=1` declares it.
 - Commands that never connect (`senders`, `accounts`) do not read the password and raise nothing.
 - `run` re-reads the password before every (re)connect, so a rotated file or a changed keychain entry needs no restart.

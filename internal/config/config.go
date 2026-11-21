@@ -5,6 +5,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -42,13 +43,19 @@ const (
 	TLSNone     = "none"
 )
 
-// IMAP holds connection settings. Password is filled from the environment.
+// IMAP holds connection settings. The password is never in the file itself: it
+// comes from password_file, password_command or the environment (see password.go).
 type IMAP struct {
 	Host     string `toml:"host"`
 	Port     int    `toml:"port"`
 	Username string `toml:"username"`
 	TLS      string `toml:"tls"`
-	Password string `toml:"-"`
+	// PasswordFile is a path to a file holding the password; PasswordCommand is
+	// a shell command printing it. At most one may be set; either wins over the
+	// environment variables.
+	PasswordFile    string `toml:"password_file"`
+	PasswordCommand string `toml:"password_command"`
+	Password        string `toml:"-"`
 }
 
 // Folder is one configured mailbox folder.
@@ -108,6 +115,13 @@ type Config struct {
 	// loaded by path). It only affects the password lookup and the default
 	// database path; it is never read from the file.
 	Account string `toml:"-"`
+
+	// PasswordWarnings are shown by every command that loads the config (a
+	// password file readable by others, inside a container).
+	PasswordWarnings []string `toml:"-"`
+	// baseDir is the folder of the config file: relative password_file paths
+	// resolve against it. Empty when the config was parsed from bytes.
+	baseDir string
 }
 
 func defaultLearn() Learn {
@@ -132,7 +146,16 @@ func LoadAccount(path, account string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	return ParseAccount(data, os.Getenv, account)
+	cfg, err := ParseAccount(data, os.Getenv, account)
+	if err != nil {
+		return nil, err
+	}
+	// Files and commands are touched here only, never while parsing.
+	cfg.baseDir = filepath.Dir(path)
+	if cfg.PasswordWarnings, err = cfg.ResolvePassword(context.Background()); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // LoadOffline is Load for commands that never connect to IMAP (e.g. `senders`):
@@ -261,7 +284,10 @@ func (c *Config) validate(requirePassword bool) error {
 	default:
 		add("imap.tls must be one of implicit, starttls, none (got %q)", c.IMAP.TLS)
 	}
-	if requirePassword && c.IMAP.Password == "" {
+	if c.IMAP.PasswordFile != "" && c.IMAP.PasswordCommand != "" {
+		add("imap.password_file and imap.password_command cannot both be set")
+	}
+	if requirePassword && c.IMAP.Password == "" && !c.hasPasswordSource() {
 		if c.Account != "" {
 			add("%s (or %s) is not set", PasswordEnvFor(c.Account), PasswordEnv)
 		} else {
