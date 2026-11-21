@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -15,6 +16,7 @@ type options struct {
 	configSet  bool // --config was given explicitly
 	account    string
 	verbose    bool
+	stderr     io.Writer // where config warnings go; set from the command
 }
 
 func defaultConfigPath() string {
@@ -40,6 +42,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&opts.account, "account", "", "use <config folder>/NAME.toml, with its own database (see `quietbox accounts`)")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		opts.configSet = cmd.Flags().Changed("config")
+		opts.stderr = cmd.ErrOrStderr()
 		return nil
 	}
 	root.PersistentFlags().BoolVarP(&opts.verbose, "verbose", "v", false, "print progress to stderr (never credentials)")

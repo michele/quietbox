@@ -56,8 +56,8 @@ Rules:
   type has several folders and no detection target.
 - Config validation (hard errors): exactly one `important` folder and it is `INBOX`;
   at least one `later`; at most one `blackhole`; no duplicate names; no unknown keys;
-  `detect = true` is not allowed on `blackhole`. The IMAP password comes only from
-  `QUIETBOX_IMAP_PASSWORD`.
+  `detect = true` is not allowed on `blackhole`. The IMAP password is never in the
+  file: it comes from `[imap] password_file` / `password_command` (M3.2) or `QUIETBOX_IMAP_PASSWORD`.
 - `[imap]` section: `host`, `port` (default 993 / 143), `username`, `tls`
   (`implicit` default, `starttls`, or `none`, which is only accepted for loopback hosts).
 - A config with only `important` + `later` works fine (SaneBox's basic setup).
@@ -294,6 +294,23 @@ INBOX-only history should count as a learned route is something to decide from `
   call, not a requirement.
 - Dovecot integration tests use throwaway users (any user with the test password gets an empty mailbox).
 - Not verified: Gmail/Fastmail. Unchanged: M3's "SaneBox off, one week" criterion.
+
+### M3.2: Password sources: implemented
+- Design: `docs/superpowers/specs/2026-11-21-password-sources-design.md`.
+- `[imap] password_file` (path; `~/`, `$VAR`/`${VAR}` expanded, an unset variable is an error naming it; relative
+  paths resolve against the config file's folder; symlinks followed; one non-empty line) or `password_command`
+  (`sh -c`, 30 s, one non-empty line; failures show exit status and stderr, never stdout). Both set is a config
+  error; either wins over the environment variables, which still work when neither is set. A `password` key stays
+  forbidden.
+- A password file readable by group/others (`mode & 077`) is refused outside a container ("chmod 600 PATH") and
+  warned about on **every** command inside one (`config.PasswordWarnings`, printed by `options.loadConfig`).
+  Container: `QUIETBOX_CONTAINER` (`0`/`false`/`no`/`off` = no, any other value = yes) else `KUBERNETES_SERVICE_HOST`, `/.dockerenv` or
+  `/run/.containerenv`. A heuristic: the override exists for runtimes it misses.
+- Parsing stays pure; only `Load`/`LoadAccount`/`RefreshPassword` touch files and commands, and offline loads
+  (`senders`, `accounts`) never do. `run` calls `RefreshPassword` before every (re)connect.
+- Verified: unit tests with injected filesystem/command/environment, real file and real command tests, Dovecot
+  integration tests (file, command, wrong password never echoed, `run` recovering after the file is corrected).
+  Not verified: a real keychain/`pass`/systemd credential setup.
 
 ### M4: Training via folder moves
 - snapshot diff, user-move detection, `quietbox explain`, `quietbox senders set <addr> <folder>`

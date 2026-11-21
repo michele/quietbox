@@ -13,7 +13,8 @@ against the Dovecot test server. See [docs/PLAN.md](docs/PLAN.md) for the roadma
 ## Configuration
 
 One TOML file (default `$XDG_CONFIG_HOME/quietbox/config.toml`, else `~/.config/quietbox/config.toml`).
-The IMAP password is **never** read from the file. Set it in the environment:
+The IMAP password is **never** written in the config file (a `password` key is an error). It comes from
+one of three places; see [Password sources](#password-sources). The simplest is the environment:
 
 ```sh
 export QUIETBOX_IMAP_PASSWORD='app-password-here'
@@ -189,6 +190,37 @@ Safety:
 - `undo` leaves alone anything you moved yourself since, and reports it. The audit log stores no
   addresses or subjects, so `undo` shows folders and the reason a message was filed.
 - Sender routes only change when you re-run `init`; learning from your own moves is M4.
+
+### Password sources
+
+Environment variables are visible in `/proc/<pid>/environ`, `systemctl show`, child processes and crash
+dumps, so for anything long-running prefer a file or a command. In `[imap]`, set **at most one** of:
+
+```toml
+[imap]
+password_file = "/run/secrets/imap-password"     # a file holding just the password
+# password_file = "${CREDENTIALS_DIRECTORY}/imap" # systemd: LoadCredential=imap:/etc/quietbox/imap.pw
+# password_file = "~/.config/quietbox/gmail.pw"   # ~/ and $VAR are expanded; relative = next to this config
+# password_command = "security find-generic-password -s quietbox-gmail -w"   # macOS Keychain
+# password_command = "pass show mail/gmail"                                   # pass, 1Password CLI, Vault, ...
+```
+
+- Either one wins over the environment variables. With neither, `QUIETBOX_IMAP_PASSWORD_<NAME>` /
+  `QUIETBOX_IMAP_PASSWORD` work as before.
+- **`password_file`** must be one non-empty line. A file readable by group or others is **refused**
+  (`chmod 600` it), except inside a container (Docker, Podman, Kubernetes), where mounted secrets are
+  usually world-readable: there it only **warns**, on every command. Container detection looks at
+  `/.dockerenv`, `/run/.containerenv` and `KUBERNETES_SERVICE_HOST`; if it guesses wrong, set
+  `QUIETBOX_CONTAINER=1` (it is a container) or `QUIETBOX_CONTAINER=0` (or `false`, `no`, `off`: it is not). Symlinks are followed.
+- **`password_command`** runs through `sh -c` with a 30 second limit; its output must be one non-empty line.
+  If it fails you see its exit status and stderr, never its output. The config file is trusted input: do not
+  let others write to it.
+- A systemd unit can use `LoadCredential=` (or `LoadCredentialEncrypted=` with `systemd-creds encrypt`, so the
+  password is encrypted at rest) together with `password_file = "${CREDENTIALS_DIRECTORY}/imap"`.
+- `quietbox run` re-reads the file or re-runs the command on every reconnect, so a rotated password needs no
+  restart. A failing command or an unreadable file is retried with the usual backoff.
+- Commands that never connect (`senders`, `accounts`) do not touch the password source.
+- Nothing ever prints or logs the password.
 
 ### Several accounts
 
