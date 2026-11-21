@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/michele/quietbox/internal/config"
+	"github.com/michele/quietbox/internal/engine"
 	"github.com/michele/quietbox/internal/store"
 )
 
@@ -63,5 +66,75 @@ func newSendersCmd(opts *options) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&filter.Folder, "folder", "", "only senders routed to this folder")
 	cmd.Flags().BoolVar(&filter.Mixed, "mixed", false, "only mixed senders")
+	cmd.AddCommand(newSendersSetCmd(opts), newSendersUnsetCmd(opts))
 	return cmd
+}
+
+// lockedState loads the config, waits for the instance lock (a running
+// `quietbox run` holds it until it stops) and opens the existing state. The
+// returned func releases both.
+func lockedState(cmd *cobra.Command, opts *options) (*config.Config, *store.Store, func(), error) {
+	cfg, err := opts.loadConfig(true)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	release, err := engine.AcquireLockWait(cmd.Context(), engine.LockPath(cfg), func() {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "waiting for another quietbox...")
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	st, err := openState(cmd.Context(), cfg, false)
+	if err != nil {
+		release()
+		return nil, nil, nil, err
+	}
+	return cfg, st, func() { _ = st.Close(); release() }, nil
+}
+
+func newSendersSetCmd(opts *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <address> <folder>",
+		Short: "Always file a sender's mail into a folder (waits while another quietbox runs)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, st, done, err := lockedState(cmd, opts)
+			if err != nil {
+				return err
+			}
+			defer done()
+			addr := strings.ToLower(strings.TrimSpace(args[0]))
+			if err := engine.SetSenderRoute(cmd.Context(), cfg, st, addr, args[1], time.Now()); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s -> %s (trained)\n", addr, args[1])
+			return err
+		},
+	}
+}
+
+func newSendersUnsetCmd(opts *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "unset <address>",
+		Short: "Remove a trained route; learned routes are left alone (waits while another quietbox runs)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, st, done, err := lockedState(cmd, opts)
+			if err != nil {
+				return err
+			}
+			defer done()
+			addr := strings.ToLower(strings.TrimSpace(args[0]))
+			removed, err := engine.UnsetSenderRoute(cmd.Context(), st, addr)
+			if err != nil {
+				return err
+			}
+			if removed {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s: trained route removed\n", addr)
+			} else {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "no trained route for %s\n", addr)
+			}
+			return err
+		},
+	}
 }
