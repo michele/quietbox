@@ -208,7 +208,17 @@ Safety:
   quietbox..." after a second, then fail with "another quietbox is still running on this mailbox after
   waiting 2m0s". The bound is for cron: a hung process does not pile up waiting jobs. `senders
   set`/`unset` wait without a limit (Ctrl-C stops them); `run` waits for the pass lock before each pass,
-  and Ctrl-C or SIGTERM stops it while it waits.
+  also without a limit (Ctrl-C or SIGTERM stops it while it waits). It says "waiting for another
+  quietbox... (lock file ...)" after a second and then "still waiting for the pass lock after 15m (lock
+  file ...)" every 5 minutes, so a stuck daemon is visible in its log.
+- **A suspended or hung process still holds its lock.** A `once` stopped with Ctrl-Z (SIGSTOP), or an
+  `init` sitting at its question, is alive, so its lock is held and the others wait: that is what
+  `--lock-timeout` is for, and why `run` keeps saying "still waiting". Find the holder with
+  `lsof <state path>.lock` (or `lsof <state path>.lock.run` for a refused `run`), then resume, finish
+  or stop it.
+- **Never delete the lock files while quietbox is running.** A lock is held on the open file, not on
+  the name: a deleted and re-created `.lock.run` is a new, free lock, so a second `run` could start
+  beside the first (and the same for the pass lock). Leaving them on disk costs nothing.
 - **A dying process never leaves a lock behind.** The locks are `flock(2)` locks, which the kernel drops
   when the process exits, however it exits (a crash, `kill -9`, the machine losing power). There are no
   PID files and nothing to clean up: the empty `.lock` and `.lock.run` files stay on disk and are
@@ -219,6 +229,10 @@ Safety:
   question to wait on) or stop `run` first.
 - Keep `[state] path` on a **local filesystem**: `flock` on a network filesystem (NFS, SMB) can be
   unreliable, and quietbox does not try to detect that.
+- **Restart `run` after editing the config.** The daemon keeps the config it started with. `init` and
+  `senders set` work while it is up (their changes to the database are read by the next pass), but a
+  folder you add to the config is not trained from (mail you move there is not learned) until `run`
+  restarts.
 
 ### Training: move mail by hand
 
@@ -320,7 +334,8 @@ password_file = "/run/secrets/imap-password"     # a file holding just the passw
 
 ### Several accounts
 
-Run **one quietbox process per account**, each with its own config file, database and lock file.
+Run **one quietbox process per account**, each with its own config file, database and two lock files
+(`.lock` and `.lock.run`).
 Put each account's config in the config folder (`~/.config/quietbox/`, or `$XDG_CONFIG_HOME/quietbox/`)
 as `NAME.toml` and select it with `--account`:
 

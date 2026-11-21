@@ -268,8 +268,10 @@ INBOX-only history should count as a learned route is something to decide from `
   (`moveGuard`) and the engine refuses before fetching anything. Not verified: which of Gmail/Outlook advertise
   both (run `quietbox check`); Outlook may also need OAuth2, which is unsupported.
 - **`run`.** `Process`, then IDLE (re-issued every 20 min), repeated; a connection error closes the connection and
-  reconnects with backoff (5s doubling to 5 min, reset by a clean pass). Refusals (no MOVE, no `init`, lock held,
-  no Sent folder) are fatal. SIGINT/SIGTERM stop it after the current pass. Since M4.1 it holds its own daemon lock
+  reconnects with backoff (5s doubling to 5 min, reset by a clean pass). Refusals (no MOVE, no `init`, another
+  `run` holds the daemon lock, no Sent folder) are fatal. SIGINT/SIGTERM cancel it at once, also in the middle of
+  a pass: a move interrupted between its `planned` row and the server's answer is settled by `reconcile` at the next
+  pass (of `run` or `once`). Since M4.1 it holds its own daemon lock
   for its lifetime (a second `run` is refused) and the pass lock only while a pass executes, so `once` and `undo`
   work while it idles. Before every wait it compares the folder's
   UIDNEXT with the cursor and goes round again if mail arrived since the pass looked (the server would not announce
@@ -413,8 +415,10 @@ INBOX-only history should count as a learned route is something to decide from `
   Go durations such as `90s`, `2m`, `1m30s`, and the config notation `1h`, `1d`; must be positive), print
   "waiting for another quietbox..." once after a second, then fail with "another quietbox is still running on this
   mailbox after waiting <d> (lock file ...)". A dry run never waits. `senders set`/`unset` wait without a bound
-  (Ctrl-C). `run` waits for the pass lock with its signal context (SIGINT/SIGTERM stop it while waiting) and says
-  "waiting for another quietbox..." once per wait.
+  (Ctrl-C). `run` waits for the pass lock without a bound, with its signal context (SIGINT/SIGTERM stop it while
+  waiting); it says "waiting for another quietbox... (lock file ...)" after a second and "still waiting for the pass
+  lock after <d> (lock file ...)" every 5 minutes (`engine.DefaultLockNotice`) for as long as the wait lasts. At
+  the timeout a bounded wait tries the lock once more, so a lock freed in the last poll interval is taken.
 - **Real `init`/`learn` hold the pass lock for the whole call**, including the interactive "create folders?" question
   and a long full scan. Meanwhile a daemon's passes and `senders set` wait, and a cron `once` can time out. The README
   recommends `--yes` or stopping `run` for a big `init`.
@@ -428,12 +432,18 @@ INBOX-only history should count as a learned route is something to decide from `
   5 s stress of `run` + a `once` loop + a `senders set`/`unset` loop + deliveries under `-race`: every message in
   exactly one folder, no key moved twice, no `planned` row; the real `run` in a child process killed with SIGKILL
   while idle and while waiting for the pass lock, after which `once` and a new `run` start at once) and a manual demo.
+  Final wave: unit tests for the repeated "still waiting" notice (and once-only for the other commands) and the last
+  attempt at the timeout; the stress test also checks the daemon made more than one pass, that flip@'s mail was
+  filed only by its hand-set route (or stayed in INBOX with no move row) and that the last `set`/`unset` is the
+  stored route.
 - **Not verified:**
   - `flock` behaviour on network filesystems (NFS, SMB); documented as unsupported, not detected.
   - the kill -9 tests are Unix-only (like the locks); a kill in the middle of a pass is not tested end to end (a
     pass interrupted by a crash is settled by `reconcile`, M3). Windows remains unsupported.
   - lock fairness: the pass lock is polled every 200 ms, so a tight loop of lock takers (the stress test's
-    `senders set` loop) can delay a waiting `once`; it is bounded by `--lock-timeout`.
+    `senders set` loop) can delay a waiting `once` (seen: about 3 s); it is bounded by `--lock-timeout`. The
+    daemon's own wait for the pass lock is not bounded: a hung `init` (at its question) or a suspended `once` stalls
+    its passes for as long as they live. That is why it repeats "still waiting" every 5 minutes; it does not fail.
 
 ### M5: BlackHole
 - `blackhole` folder type: move a message there to block the sender

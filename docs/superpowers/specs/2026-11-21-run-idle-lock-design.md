@@ -63,8 +63,10 @@ acquires both immediately.
 
 ## Waiting rules
 
-- `run` waits for the pass lock with a context (cancel on SIGINT/SIGTERM), and says so once per
-  wait via its progress output (`waiting for another quietbox...`).
+- `run` waits for the pass lock with a context (cancel on SIGINT/SIGTERM), and says so via its
+  progress output: `waiting for another quietbox... (lock file ...)` after a second, then
+  `still waiting for the pass lock after <d> (lock file ...)` every 5 minutes (final wave: the
+  wait is unbounded, so it must not be silent).
 - `senders set/unset`: unchanged behaviour (wait, notice after 1 s, Ctrl-C) but now they wait at
   most one pass.
 - `once`, `undo`, `init`/`learn` wait up to **2 minutes** (`--lock-timeout DURATION` to change, same
