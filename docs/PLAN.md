@@ -269,9 +269,10 @@ INBOX-only history should count as a learned route is something to decide from `
   both (run `quietbox check`); Outlook may also need OAuth2, which is unsupported.
 - **`run`.** `Process`, then IDLE (re-issued every 20 min), repeated; a connection error closes the connection and
   reconnects with backoff (5s doubling to 5 min, reset by a clean pass). Refusals (no MOVE, no `init`, another
-  `run` holds the daemon lock, no Sent folder) are fatal. SIGINT/SIGTERM cancel it at once, also in the middle of
-  a pass: a move interrupted between its `planned` row and the server's answer is settled by `reconcile` at the next
-  pass (of `run` or `once`). Since M4.1 it holds its own daemon lock
+  `run` holds the daemon lock, no Sent folder) are fatal. SIGINT/SIGTERM cancel its context: a wait (IDLE, backoff,
+  the pass lock) ends at once; a pass stops at its next check (between messages, and at the start of each move or
+  lookup), while an IMAP command already sent runs to completion. A move left between its `planned` row and the
+  server's answer is settled by `reconcile` at the next pass (of `run` or `once`). Since M4.1 it holds its own daemon lock
   for its lifetime (a second `run` is refused) and the pass lock only while a pass executes, so `once` and `undo`
   work while it idles. Before every wait it compares the folder's
   UIDNEXT with the cursor and goes round again if mail arrived since the pass looked (the server would not announce

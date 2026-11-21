@@ -389,11 +389,14 @@ func TestAcquireLockWaitNotifyRepeats(t *testing.T) {
 		if i == 0 && w < time.Second {
 			t.Errorf("first notice after %v, want >= 1s", w)
 		}
-		if i > 0 && w-got[0] < time.Duration(i)*every-200*time.Millisecond {
-			t.Errorf("notice %d after %v: too soon after the first (%v)", i, w, got[0])
-		}
+		// Consecutive notices: increasing and roughly one interval apart. The
+		// tolerance (every/2) absorbs poll jitter and a delayed notice under
+		// -race; notices only happen on 200 ms polls, so a real gap is >= that.
 		if i > 0 && w <= got[i-1] {
 			t.Errorf("elapsed not increasing: %v", got)
+		}
+		if i > 0 && w-got[i-1] < every/2 {
+			t.Errorf("notice %d only %v after notice %d: %v", i, w-got[i-1], i-1, got)
 		}
 	}
 }
