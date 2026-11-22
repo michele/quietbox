@@ -1,15 +1,91 @@
 # quietbox
 
-A self-hosted, open-source alternative to SaneBox: a Go CLI/daemon that watches an IMAP
-mailbox and moves non-urgent mail out of the inbox, learning from the folders you move mail into.
+A self-hosted, open-source alternative to SaneBox. quietbox watches an IMAP mailbox and moves
+non-urgent mail (newsletters, receipts, notifications, blocked senders) out of your inbox into
+folders you choose, **learning from how you file mail yourself**. One static Go binary, run from
+cron or as a daemon, for any IMAP server that supports `MOVE` (developed against Fastmail).
 
-**Status: M4 (training).** `check`, `init`, `senders` (with `set`/`unset`), `scan`, `eval`, `once`,
-`run`, `undo` and `explain` exist. quietbox learns where your mail goes today (`init`), then files
-**new** INBOX mail as it arrives (`once` for cron, `run` as a daemon), and learns from the mail you
-move by hand: file a message into a folder and that sender goes there; drag one back to INBOX and
-that sender stays in INBOX. It never deletes or expunges anything, every move is written to an audit
-log first, and `undo` reverses it. **It has not been tried on a real provider yet**: it has been run
-end to end only against the Dovecot test server. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> **Status: v0.1, early.** Reading, learning and measuring (`check`, `init`, `scan`, `eval`) have been
+> run on a real mailbox. **Moving mail** (`once`, `run`, `undo`, training from your moves) has so far
+> only been run against a test IMAP server (Dovecot), not for any length of time on Fastmail, Gmail or
+> another real provider. Start with the dry runs, keep `undo` in mind, and expect rough edges.
+> What is and is not verified is listed per milestone in [docs/PLAN.md](docs/PLAN.md).
+
+- [What it does](#what-it-does) · [Safety](#safety) · [Install](#install) · [Quick start](#quick-start) · [Providers](#providers)
+- [Coming from SaneBox](docs/MIGRATING-FROM-SANEBOX.md) · [Running it: systemd](docs/SYSTEMD.md), [Docker](#running-in-docker)
+- Reference: [Configuration](#configuration) · [Usage](#usage) · [Locks](#locks) · [Training](#training-move-mail-by-hand) · [Passwords](#password-sources) · [Several accounts](#several-accounts)
+
+## What it does
+
+You give quietbox a few folders, each with a **type**: `important` (your INBOX), `later`, `newsletter`,
+`bulk` (receipts, notifications), and optionally `blackhole` (senders you never want to see).
+
+1. `quietbox init` reads your existing folders and Sent mail and learns where each sender's mail belongs.
+2. `quietbox once` (cron) or `quietbox run` (daemon) files **new** mail as it arrives, by what it learned and by
+   detectors for newsletters, bulk mail and automated mail. Mail it cannot place stays in INBOX: hiding a real
+   person's email is the failure it tries hardest to avoid.
+3. When you move a message into a folder (or back to INBOX), that sender follows. One move is enough.
+4. Mail in the blackhole folder moves to Trash after 30 days (configurable), never sooner, and never deleted by quietbox.
+
+Not included: a web interface, snooze and reply reminders, digests, OAuth2 (see [Providers](#providers)),
+Windows (the instance locks need Unix `flock`). One quietbox process runs per mailbox account.
+
+## Safety
+
+- **Never deletes or expunges.** Everything is a `MOVE`; "delete" means Trash. Without `MOVE` and `UIDPLUS` on the
+  server, quietbox refuses to run.
+- **Audit first.** Every move is written to a local audit log before it happens, and `quietbox undo --since 1h`
+  reverses it. Every command that changes anything has `--dry-run`.
+- **Headers only.** Message bodies are never downloaded. Passwords never go in the config file (`password_file`,
+  `password_command` or an environment variable) and are never logged.
+- **New mail only.** `init` marks where each folder ends; `once` and `run` never touch mail that was already there.
+
+## Install
+
+- **Binary** (Linux and macOS, amd64 and arm64): download the archive from the
+  [releases page](https://github.com/michele/quietbox/releases), check it against `checksums.txt`
+  (`shasum -a 256 -c checksums.txt --ignore-missing`), unpack it and put `quietbox` on your `PATH`. The macOS
+  binaries are not signed or notarized, so Gatekeeper will refuse the first run: `xattr -d com.apple.quarantine quietbox`,
+  or build from source.
+- **With Go** (1.26 or newer): `go install github.com/michele/quietbox/cmd/quietbox@latest`.
+- **From source:** `make build` puts a static binary in `./bin`.
+- **Always on:** [systemd units](docs/SYSTEMD.md), or the [container image](#running-in-docker) (`ghcr.io/michele/quietbox`).
+
+`quietbox --version` prints the version.
+
+## Quick start
+
+```sh
+export QUIETBOX_IMAP_PASSWORD='your-app-password'          # see Providers for where to get one
+mkdir -p ~/.config/quietbox
+cp examples/fastmail.toml ~/.config/quietbox/config.toml   # edit the host and username
+
+quietbox check              # connects: capabilities, and which folders exist
+quietbox init --dry-run     # read-only: what it would learn (writes only the report)
+quietbox init               # creates missing folders (asks first; --yes skips the question) and learns
+quietbox scan               # read-only: what it would do with your INBOX right now
+quietbox once --dry-run     # what the next pass would move; changes nothing
+quietbox once               # file new mail (run it from cron), or: quietbox run
+quietbox undo --since 1h    # change your mind
+```
+
+Review the CSV report `init` writes before anything is filed. `quietbox eval` measures how well it would
+have done on mail you have already sorted. If your mailbox has never been sorted by anything, read
+[Starting on a never-managed account](#starting-on-a-never-managed-account) first.
+
+## Providers
+
+| Provider | Status | Config |
+|---|---|---|
+| Fastmail | what it was developed against; app password | [`examples/fastmail.toml`](examples/fastmail.toml) |
+| Gmail | **untested**; IMAP with an [app password](https://myaccount.google.com/apppasswords) (needs 2-Step Verification) | [`examples/gmail.toml`](examples/gmail.toml) |
+| Any IMAP server with `MOVE` and `UIDPLUS` | tested against Dovecot 2.4.5 only; `quietbox check` shows what your server offers | [`examples/generic-imap.toml`](examples/generic-imap.toml) |
+| Microsoft 365, Outlook.com | **not supported**: IMAP needs OAuth2, which quietbox does not implement | |
+
+An **app password** is a separate password your provider creates for one application, so you never give
+quietbox your real one. Create it in your provider's security settings (Fastmail: Settings, Privacy & Security,
+Integrations, New app password, "Mail (IMAP)"), and keep it out of the config file: see
+[Password sources](#password-sources).
 
 ## Configuration
 
@@ -384,8 +460,8 @@ quietbox --account fastmail run
   one, with a message telling you to set `[state] path`. Existing databases adopt the account that first
   opens them.
 - For several accounts running as services, use one service per account (for example `quietbox --account gmail run`
-  in its own systemd unit or container). For Docker, see [Running in Docker](#running-in-docker); systemd
-  units come with M6.
+  in its own systemd unit or container). For systemd, see [docs/SYSTEMD.md](docs/SYSTEMD.md); for Docker,
+  see [Running in Docker](#running-in-docker).
 
 ### Starting on a never-managed account
 
@@ -432,6 +508,7 @@ builds amd64 + arm64.
 make test     # go test ./... -race
 make lint     # go vet + golangci-lint (fetched via `go run`, pinned version)
 make build    # static binary in ./bin (CGO_ENABLED=0)
+make release-snapshot   # the release archives for all platforms into ./dist, published nowhere
 make itest    # starts the throwaway Dovecot server, seeds it, runs integration tests, tears down
 ```
 

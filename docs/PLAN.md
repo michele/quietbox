@@ -500,10 +500,32 @@ INBOX-only history should count as a learned route is something to decide from `
     Linux VM filesystem; migration via `sqlite3 .backup` exercised on a throwaway copy.
   - Not verified: a real NAS, a real provider in the container, amd64 hardware, the publish workflow (no tag
     pushed, so nothing is on ghcr.io yet), Docker Engine (only Podman).
-- Remaining: goreleaser binaries, a first registry publish (push a `v*` tag from a green commit, then make the
-  GHCR package public, since GitHub creates it private, or document `docker login ghcr.io`) and its verification, systemd
-  units, README (Fastmail, Gmail, generic IMAP; app passwords), example configs incl. a "migrating from SaneBox"
-  guide (LICENSE: done, MIT)
+- **Version, license and binaries: done, not yet published.**
+  - `quietbox --version` / `quietbox version`: set by `-ldflags` (`make build`, the Dockerfile, goreleaser, the image workflow);
+    `go install` builds fall back to the embedded build info. The image also carries `/LICENSE` and the MIT label.
+  - `.goreleaser.yaml` (pinned v2.20.3, also `make release-snapshot`): linux and darwin, amd64 and arm64, no Windows
+    (the locks need `flock`). Archives hold the binary, `LICENSE`, `README.md`, the example configs, `docs/SYSTEMD.md` and the
+    units; `checksums.txt`; the changelog comes from the conventional commits; the GitHub release is created as a **draft**.
+    `.github/workflows/release.yml` runs it on `v*` tags, next to `docker.yml`.
+  - Verified: a local snapshot build of all four targets, checksums checked, archive contents listed, the darwin/arm64 binary run on
+    the host and the linux/arm64 binary run in a container, the image built twice with different version args (the compile step
+    is rebuilt, so `--version` follows the args even under podman).
+- **systemd: done** (`deploy/systemd/`, `docs/SYSTEMD.md`). A template unit `quietbox@.service` (instance = account, config
+  `/etc/quietbox/NAME.toml`, database `/var/lib/quietbox/NAME.db`), a sysusers file and a user-service variant. A static `quietbox`
+  user, not `DynamicUser`: `undo`/`senders`/`once` run beside the daemon as the same user, otherwise root-run commands would leave
+  root-owned SQLite files the service cannot write. The unit waits (`ConditionPathExists`) until `init` has created the database.
+  - Verified on systemd 255 (Fedora CoreOS 40, aarch64) with the linux/arm64 binary and the Dovecot test server: `systemd-analyze
+    verify` on both units, exposure 1.5 (OK), no start before `init`, then a start as the `quietbox` user, a message delivered
+    while it idled was filed, `undo` beside the daemon, file ownership, `systemctl stop` -> `Result=success`.
+  - Not verified: other distributions, `x86_64`, a real provider, DNS under `RestrictAddressFamilies=AF_INET AF_INET6`, starting
+    at boot, actually running the user unit.
+- **README, examples and the SaneBox guide: done.** The README opens with what it does, safety, install, a quick start and a provider
+  table; `examples/` has Fastmail, Gmail (untested) and generic IMAP; `docs/MIGRATING-FROM-SANEBOX.md`. A test parses every example
+  config and every complete TOML block in the docs; the quick start was run command by command against the Dovecot server.
+  Links and anchors in the docs were checked. Not verified: Gmail, Fastmail for moving mail, a real SaneBox migration.
+- **Remaining:** push, tag `v0.1.0` from a green commit and watch `docker.yml` and `release.yml` run (they have never run on GitHub; CI too),
+  make the GHCR package public (GitHub creates it private) or document `docker login ghcr.io`, read and publish the draft release.
+  Suggested after: `SECURITY.md`, `CONTRIBUTING.md`, a Homebrew tap, the blog post.
 
 ## Ideas (not planned)
 
