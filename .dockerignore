@@ -1,0 +1,19 @@
+# Deny everything, then allow only what the build needs. This keeps secrets and
+# state out of the build context for good: the root `env` file, `.env*`, `*.db`,
+# any `*.toml` config, `.git`, `.superpowers`, `deploy/` (including deploy/local,
+# deploy/secrets and deploy/data) never reach the builder.
+*
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+# Even inside the allowed trees, never send these.
+**/*.db
+**/*.db-*
+**/*.toml
+**/.env*
+**/env
+**/*_test.go
+**/testdata
