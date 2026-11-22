@@ -360,3 +360,97 @@ func TestSendersBeforeInitSaysSo(t *testing.T) {
 		t.Error("senders must not create the database")
 	}
 }
+
+// initNoReportFlag runs init without --report, from an empty working directory
+// that must stay empty.
+func (e *learnEnv) initNoReportFlag(extra ...string) (stdout, stderr string, err error) {
+	e.t.Helper()
+	cwd := e.t.TempDir()
+	e.t.Chdir(cwd)
+	e.t.Cleanup(func() { assertOnlyEntries(e.t, cwd) })
+	return e.run("", append([]string{"init", "--now", "2026-06-01"}, extra...)...)
+}
+
+func (e *learnEnv) defaultReport() string {
+	return filepath.Join(filepath.Dir(e.db), "q.learn-report.csv")
+}
+
+func TestLearnDefaultReportNextToDatabase(t *testing.T) {
+	e := newLearnEnv(t)
+	out, _, err := e.initNoReportFlag("--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "\nReport written to "+e.defaultReport()+"\n") {
+		t.Errorf("output:\n%s", out)
+	}
+	fi, err := os.Stat(e.defaultReport())
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("report next to the database: %v %v (want mode 0600)", fi, err)
+	}
+	raw, _ := os.ReadFile(e.defaultReport())
+	if !strings.Contains(string(raw), "alice@friends.test") {
+		t.Errorf("report content:\n%s", raw)
+	}
+}
+
+func TestLearnDryRunDefaultReportCreatesStateDir(t *testing.T) {
+	e := newLearnEnv(t)
+	stateDir := filepath.Dir(e.db)
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("state dir should not exist yet: %v", err)
+	}
+	out, _, err := e.initNoReportFlag("--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Report written to "+e.defaultReport()) {
+		t.Errorf("output:\n%s", out)
+	}
+	if fi, err := os.Stat(stateDir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("state dir: %v %v (want mode 0700)", fi, err)
+	}
+	if _, err := os.Stat(e.db); !os.IsNotExist(err) {
+		t.Errorf("dry run must not create the database (stat err = %v)", err)
+	}
+	assertOnlyEntries(t, stateDir, "q.learn-report.csv")
+}
+
+func TestLearnEmptyReportFlagWritesNothing(t *testing.T) {
+	e := newLearnEnv(t)
+	out, _, err := e.initNoReportFlag("--yes", "--report", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "Report written") {
+		t.Errorf("output:\n%s", out)
+	}
+	ents, err := os.ReadDir(filepath.Dir(e.db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ent := range ents {
+		if strings.HasSuffix(ent.Name(), ".csv") {
+			t.Errorf("--report '' wrote %s", ent.Name())
+		}
+	}
+}
+
+func TestLearnUnwritableReportIsAWarning(t *testing.T) {
+	e := newLearnEnv(t)
+	bad := t.TempDir() // a directory: cannot be written as a file
+	out, errOut, err := e.initNoReportFlag("--yes", "--report", bad)
+	if err != nil {
+		t.Fatalf("a report failure must not fail init: %v", err)
+	}
+	if !strings.Contains(errOut, "warning: could not write the report to "+bad+": ") {
+		t.Errorf("stderr:\n%s", errOut)
+	}
+	if strings.Contains(out, "Report written") {
+		t.Errorf("stdout claims the report was written:\n%s", out)
+	}
+	if got := routes(t, e.openStore()); len(got) == 0 {
+		t.Error("the learned state was not saved")
+	}
+	assertOnlyEntries(t, bad)
+}

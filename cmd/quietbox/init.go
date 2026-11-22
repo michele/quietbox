@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,8 +42,10 @@ marked as read and no body is downloaded), works out a route for every sender,
 and stores the result. The only change it can make to your mailbox is creating
 configured folders that do not exist yet, and only with your confirmation.
 
-It always writes a report (default learn-report.csv) so you can review the
-result before any mail is moved. Running it again rebuilds the learned data.
+It always writes a CSV report so you can review the result before any mail is
+moved: by default next to the database, named after it (quietbox.db ->
+quietbox.learn-report.csv), also on a dry run. Running it again rebuilds the
+learned data and replaces the report.
 
 For an account that was never managed by SaneBox or similar, use --fresh: INBOX
 history says nothing about where mail belongs, so it is not learned as routes.
@@ -60,7 +65,7 @@ it waits for it, at most --lock-timeout, then fails. A dry run never waits.`,
 	fl.BoolVarP(&f.yes, "yes", "y", false, "create missing folders without asking")
 	fl.BoolVar(&f.fresh, "fresh", false, "account never managed before: do not learn routes from INBOX history")
 	fl.StringVar(&f.backlog, "backlog", "", "with --fresh: let 'once' also sort INBOX mail from this long ago, e.g. 30d")
-	fl.StringVar(&f.report, "report", "learn-report.csv", "where to write the CSV report (empty to skip)")
+	fl.StringVar(&f.report, "report", "", "where to write the CSV report (default: <database name>.learn-report.csv next to the database; empty to skip)")
 	fl.StringVar(&f.now, "now", "", "treat this date (YYYY-MM-DD) as today; for tests and demos")
 	_ = fl.MarkHidden("now")
 	addLockTimeoutFlag(cmd, &f.lockWait)
@@ -142,17 +147,100 @@ func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
 	if err := rep.Write(cmd.OutOrStdout()); err != nil {
 		return err
 	}
-	if f.report != "" {
-		if err := writeReport(rep, f.report); err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nReport written to %s\n", f.report)
+	if path, isDefault := reportTarget(cmd, f.report, cfg.State.Path); path != "" {
+		emitReport(cmd, rep, path, isDefault)
 	}
 	return nil
 }
 
-func writeReport(rep *engine.LearnReport, path string) error {
-	return writeCSVFile(path, rep.WriteCSV)
+// defaultReportPath is the report next to the database, named after it:
+// <dir>/quietbox.db -> <dir>/quietbox.learn-report.csv. The state path is already
+// account-aware, so two accounts never share a report.
+func defaultReportPath(statePath string) string {
+	dir, file := filepath.Split(statePath)
+	return filepath.Join(dir, strings.TrimSuffix(file, ".db")+".learn-report.csv")
+}
+
+// reportTarget resolves --report: not given means the default next to the
+// database (isDefault), given empty means no report (path "").
+func reportTarget(cmd *cobra.Command, report, statePath string) (path string, isDefault bool) {
+	if cmd.Flags().Changed("report") {
+		return report, false
+	}
+	return defaultReportPath(statePath), true
+}
+
+// emitReport writes the CSV report. By now init has saved its state and printed
+// its summary, so a failure is a warning, not an error exit.
+func emitReport(cmd *cobra.Command, rep *engine.LearnReport, path string, isDefault bool) {
+	if err := writeReportFile(path, isDefault, rep.WriteCSV); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not write the report to %s: %v\n", path, err)
+		return
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nReport written to %s\n", path)
+}
+
+// writeReportFile writes a private (0600) file atomically: a temporary file in
+// the same directory, renamed over the target, so a crash or a full disk never
+// leaves a truncated report. mkdir creates the parent directory (0700) first. A
+// target that exists and is not a regular file (/dev/stdout, a named pipe) is
+// written in place, since a rename would replace it; a symlink is followed.
+func writeReportFile(path string, mkdir bool, write func(io.Writer) error) (err error) {
+	defer func() {
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err // the caller already names the report path
+		}
+	}()
+	if mkdir {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				return fmt.Errorf("create %s: %w", pe.Path, pe.Err)
+			}
+			return err
+		}
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
+		return writeInPlace(path, write)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*") // mode 0600
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	if err = write(tmp); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+func writeInPlace(path string, write func(io.Writer) error) (err error) {
+	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+	}()
+	return write(out)
 }
 
 func parseNow(s string) (time.Time, error) {
