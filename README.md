@@ -76,6 +76,10 @@ personal_domains = []             # extra domains that never get a domain defaul
 skip_seen = true                  # leave mail you have already read where it is
 skip_flagged = true               # leave flagged mail where it is
 
+[blackhole]
+retention = "30d"                 # move mail out of the blackhole folder to Trash after this long; "off" to keep it
+trash_folder = ""                 # default: the folder the server marks \Trash
+
 [state]
 path = ""                         # default: $XDG_STATE_HOME/quietbox/quietbox.db
 ```
@@ -274,6 +278,28 @@ Training changes only the local database, never the mailbox.
   so); moves made earlier are not learned, and messages you filed by hand earlier are only recognised
   when you move them back to INBOX after you re-run `init` (or `learn`).
 - There is no setting to turn training off; `senders unset` undoes a trained route.
+
+### Blocking senders: the blackhole folder
+
+Move a message into the blackhole folder and that sender is blocked: their future mail goes to the
+same folder instead of INBOX (see "Training" above). Nothing is deleted at that point, so you can look
+through it and rescue anything.
+
+Mail that has been in the folder longer than `[blackhole] retention` (default `30d`) is then moved to
+**Trash**. quietbox only moves it, it never expunges or deletes: emptying Trash is up to you and your
+provider (Gmail, for one, deletes Trash after 30 days).
+
+- **The 30 days start when the message lands in the blackhole folder**, not when it was sent. quietbox
+  notices a message at the first sweep that sees it (sweeps run with `once` and `run` passes, at most
+  hourly), so with `once` in cron the clock starts at the next run after it arrives.
+- **Flagged mail is never moved out.** Unflag it and it goes at the next sweep.
+- The sweep runs at the end of `once` and `run`, at most once an hour. `once --dry-run` shows what
+  would go to Trash. Each move is audited first and listed in the report.
+- **`undo --since` brings a message back**, and quietbox will not move it to Trash again. To unblock a
+  sender, drag one of their messages (from the blackhole folder or from Trash) back to INBOX.
+- Trash is the folder the server flags `\Trash`; set `trash_folder` if yours has no flag. Without a
+  Trash folder, `once` warns and leaves the mail where it is.
+- `retention = "off"` turns the sweep off and the folder keeps everything.
 
 ### Setting routes by hand: `senders set`, `senders unset`
 

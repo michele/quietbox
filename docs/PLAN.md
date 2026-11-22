@@ -38,7 +38,7 @@ type = "bulk"          # receipts, notifications, transactional
 
 [[folder]]
 name = "+QuietBlackHole" # optional
-type = "blackhole"     # sender blocked; future mail goes to Trash
+type = "blackhole"     # sender blocked; mail stays here for [blackhole] retention, then goes to Trash
 ```
 
 | Type         | Holds                                                   | Detection signals for unknown senders |
@@ -141,6 +141,8 @@ M4 below.
   newest shown by `explain`. `folder` is the new route (the INBOX name means "stays in INBOX").
 - `decisions(message_key, folder, reason, at)`
 - `audit(id, action, message_key, from_folder, to_folder, reason, at, undone, status, dest_uidvalidity, dest_uid)`: `action` is `create_folder`, `move` or `undo_move`; `status` is `planned|done|failed`
+- `blackhole_seen(key, first_seen)` (schema v6): when the retention sweep first saw each message in the blackhole
+  folder; keys and times only. The time of the last sweep is `meta.blackhole_swept_at`.
 - `cursors(folder, uidvalidity, next_uid, backlog_below)`: where `once`/`run` resume (INBOX and Sent from schema v3;
   every typed folder too from M4)
 
@@ -286,7 +288,7 @@ INBOX-only history should count as a learned route is something to decide from `
   `cursors(folder, uidvalidity, next_uid)`. The audit log holds keys, folders and reasons, never addresses or subjects.
 - Message keys are still Message-ID then hash: go-imap v2 (beta.9) cannot fetch EMAILID.
 - Blackhole: mail from a sender routed to the blackhole folder is moved *into that folder* like any other route;
-  the "future mail goes to Trash" behaviour is M5.
+  mail then stays there for `[blackhole] retention` before it goes to Trash (M5).
 - Verified against the Dovecot test server only (`make itest`: once, dry-run, undo, drag-back, run waking on
   delivery, lock). **Done when:** SaneBox is switched off and quietbox has run for a week. That part is not verified.
 
@@ -447,8 +449,42 @@ INBOX-only history should count as a learned route is something to decide from `
     daemon's own wait for the pass lock is not bounded: a hung `init` (at its question) or a suspended `once` stalls
     its passes for as long as they live. That is why it repeats "still waiting" every 5 minutes; it does not fail.
 
-### M5: BlackHole
-- `blackhole` folder type: move a message there to block the sender
+### M5: BlackHole retention: implemented
+- Design: `docs/superpowers/specs/2026-11-22-m5-blackhole-retention-design.md`; plan: `docs/superpowers/plans/2026-11-22-m5-blackhole-retention.md`.
+- **Blocking already worked.** M3 files a blackholed sender's mail into the blackhole folder and M4 training makes a drag
+  into it block the sender. Mail does **not** go straight to Trash; M5 adds the retention sweep.
+- **Config.** `[blackhole] retention` (default `"30d"`, the usual duration units, `"off"` disables) and `trash_folder`
+  (default: the folder the server flags `\Trash`; may not be INBOX or a configured folder). The section does nothing without a
+  blackhole folder.
+- **Sweep** (`engine.sweepBlackhole`, last step of `Process`, under the pass lock). It reads the whole blackhole folder,
+  records each message's first-seen time in `blackhole_seen`, forgets messages that left, and moves every message past
+  retention to Trash. A real run sweeps at most once an hour (`meta.blackhole_swept_at`); a dry run always looks and
+  writes nothing. `planSweep` is pure and table-tested.
+- **Age counts from arrival in the folder**, not INTERNALDATE: a move keeps INTERNALDATE, so a sender blocked on day 29
+  would otherwise be trashed on day 30. The clock starts at the first sweep that sees the message (sweeps run with passes, at most hourly, so
+  it is as late as the next pass after the message lands), and for mail already in the folder when M5 is installed, at the first M5 pass.
+- **Never swept:** flagged messages (they stay and are counted in the report), and messages brought back with `undo`
+  (found through the audit log: a done move out of the blackhole folder that is now `undone`).
+- **Audit.** A purge is an ordinary `move` row (`retention: in <folder> for <retention> or more`), written `planned` before
+  the move and completed with the COPYUID destination. So `undo --since`, `reconcile` and own-move recognition work
+  unchanged: `undo` restores the message without training, and an interrupted purge is settled at the next pass. Dragging
+  a message from Trash to INBOX is a return and pins the sender to INBOX (the way to unblock one).
+- **No Trash.** If messages are due but no Trash folder is found, the pass warns (so `once` exits non-zero) and moves nothing;
+  first-seen times are still saved. A failed move is a warning too and is tried again at the next sweep.
+- **Report.** `ProcessReport.Purged` is separate from `Moves`, so the INBOX counts are unchanged. `once` and `run` print one
+  line per message and a summary ("moved N message(s) from X to Trash (kept: 1 flagged, 2 restored by undo)").
+- State: schema v6.
+- Verified: unit tests (config, store migration, `planSweep` table, pass tests with the fake backend: first pass, due purge with
+  audit first, dry run, hourly gate, no Trash, configured Trash, failed move, off, undo then no re-purge and no training,
+  reconcile of an interrupted purge), `make itest` (a throwaway Dovecot user: the first pass only records, a dry run lists,
+  the real run purges one message and keeps the flagged and the young one, `undo` restores it and it is not purged again;
+  time is moved by editing the first-seen times in the database) and a manual demo.
+- **Not verified:**
+  - Trash special-use on real Fastmail or Gmail (Dovecot flags `\Trash` by default). On Gmail a move into `[Gmail]/Trash` is
+    followed by Gmail's own deletion after 30 days.
+  - a very large blackhole folder: the whole folder is read once an hour.
+  - a later copy (same Message-ID) of a purged message is left in INBOX unclassified, as for any message quietbox has moved.
+  - that retention counts real elapsed time: the integration test moves the stored times instead of waiting.
 
 ### M6: Open-source release
 - **Docker image and compose: done.** `Dockerfile` (cross-compiling build stage, distroless static nonroot,

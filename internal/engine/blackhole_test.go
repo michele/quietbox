@@ -318,3 +318,36 @@ func TestSweepPurgeInterruptedAfterTheMoveIsSettled(t *testing.T) {
 		}
 	}
 }
+
+// Dragging a swept message from Trash back to INBOX is the way to unblock its
+// sender: it reads as a return, pins the sender to INBOX and is not classified.
+func TestSweepDragFromTrashToInboxUnblocksTheSender(t *testing.T) {
+	fake, st, cfg := sweepBox(t)
+	passAt(t, fake, st, cfg, learnNow, false)
+	purgeAt := learnNow.Add(31 * 24 * time.Hour)
+	passAt(t, fake, st, cfg, purgeAt, false)
+
+	var uid uint32
+	for _, h := range fake.Messages["Trash"] {
+		if h.MessageID == "<bh1>" {
+			uid = h.UID
+		}
+	}
+	if uid == 0 {
+		t.Fatal("<bh1> was not swept to Trash")
+	}
+	if _, err := fake.Move(bg, "Trash", uid, "INBOX"); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := passAt(t, fake, st, cfg, purgeAt.Add(10*time.Minute), false)
+	if len(rep.Trained) != 1 || rep.Trained[0].Sender != "block1@bh.test" || rep.Trained[0].To != "INBOX" {
+		t.Fatalf("trained = %+v", rep.Trained)
+	}
+	if !idsIn(fake, "INBOX")["<bh1>"] || len(rep.Moves) != 0 {
+		t.Errorf("the returned message must stay in INBOX: moves=%+v", rep.Moves)
+	}
+	if s, ok, _ := st.Sender(bg, "block1@bh.test"); !ok || s.RouteFolder != "INBOX" || s.RouteSource != store.SourceTrained {
+		t.Errorf("sender = %+v, %v", s, ok)
+	}
+}
