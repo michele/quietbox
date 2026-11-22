@@ -37,7 +37,7 @@ func TestMigrateV4ToV5(t *testing.T) {
 		t.Fatalf("upgrade: %v", err)
 	}
 	defer func() { _ = s.Close() }()
-	if v, err := s.version(); err != nil || v != 5 {
+	if v, err := s.version(); err != nil || v != len(migrations) {
 		t.Fatalf("version = %d, %v", v, err)
 	}
 	for _, tb := range []string{"messages", "training"} {
