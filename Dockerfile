@@ -36,8 +36,10 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 # stale by podman/buildah).
 LABEL org.opencontainers.image.title="quietbox" \
       org.opencontainers.image.description="Self-hosted IMAP triage daemon: moves non-urgent mail out of the inbox, learning from how you file it" \
-      org.opencontainers.image.source="https://github.com/michele/quietbox"
+      org.opencontainers.image.source="https://github.com/michele/quietbox" \
+      org.opencontainers.image.licenses="MIT"
 COPY --from=build /out/quietbox /quietbox
+COPY LICENSE /LICENSE
 USER 65532:65532
 ENTRYPOINT ["/quietbox"]
 CMD ["run", "--config", "/config/quietbox.toml"]
