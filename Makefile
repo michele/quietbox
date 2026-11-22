@@ -11,8 +11,9 @@ DOCKER_BUILD_ARGS = --label org.opencontainers.image.version=$(VERSION) --label 
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(REVISION)
 COMPOSE_FILE := docker-compose.test.yml
 ITEST_CONFIG := testdata/config/itest.toml
+GORELEASER_VERSION ?= v2.20.3
 
-.PHONY: test lint itest itest-up itest-down seed build docker-build docker-buildx
+.PHONY: test lint itest itest-up itest-down seed build release-snapshot docker-build docker-buildx
 
 test:
 	go test ./... -race
@@ -23,6 +24,10 @@ lint:
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/quietbox ./cmd/quietbox
+
+# All release archives into ./dist, built locally and published nowhere.
+release-snapshot:
+	go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION) release --snapshot --clean
 
 # Container image for this machine's architecture, tagged quietbox:local.
 docker-build:
