@@ -503,7 +503,7 @@ INBOX-only history should count as a learned route is something to decide from `
 - Remaining: goreleaser binaries, a first registry publish (push a `v*` tag from a green commit, then make the
   GHCR package public, since GitHub creates it private, or document `docker login ghcr.io`) and its verification, systemd
   units, README (Fastmail, Gmail, generic IMAP; app passwords), example configs incl. a "migrating from SaneBox"
-  guide, LICENSE
+  guide (LICENSE: done, MIT)
 
 ## Ideas (not planned)
 

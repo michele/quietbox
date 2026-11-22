@@ -442,3 +442,7 @@ real mailbox.
 
 Note: Dovecot 2.4.5 does not advertise `OBJECTID`, so the local tests only exercise the
 `Message-ID` key fallback. The `EMAILID` path needs a server that supports RFC 8474 (e.g. Fastmail).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
