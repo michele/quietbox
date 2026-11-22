@@ -3,9 +3,10 @@ COMPOSE ?= $(shell command -v docker >/dev/null 2>&1 && echo "docker compose" ||
 CONTAINER ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
 IMAGE ?= ghcr.io/michele/quietbox:latest
 PLATFORMS ?= linux/amd64,linux/arm64
+# Lazily expanded (?= and =), so only the docker targets shell out to git.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
-DOCKER_BUILD_ARGS := --label org.opencontainers.image.version=$(VERSION) --label org.opencontainers.image.revision=$(REVISION)
+DOCKER_BUILD_ARGS = --label org.opencontainers.image.version=$(VERSION) --label org.opencontainers.image.revision=$(REVISION)
 COMPOSE_FILE := docker-compose.test.yml
 ITEST_CONFIG := testdata/config/itest.toml
 
@@ -26,15 +27,17 @@ docker-build:
 	$(CONTAINER) build $(DOCKER_BUILD_ARGS) -t quietbox:local .
 
 # Multi-arch image (amd64 + arm64) named $(IMAGE). The build stage cross-compiles,
-# so no QEMU is needed. PUSH=1 pushes it; without PUSH, docker only builds (the
-# result stays in the buildx cache) and podman keeps a local manifest list.
+# so no QEMU is needed. Only PUSH=1 pushes. Without it, podman keeps a local
+# manifest list; docker needs a docker-container builder (docker buildx create
+# --use) or the containerd image store for a multi-platform build, and then keeps
+# the result in the build cache only.
 docker-buildx:
 ifeq ($(CONTAINER),podman)
 	-podman manifest rm $(IMAGE) 2>/dev/null
 	podman build $(DOCKER_BUILD_ARGS) --platform $(PLATFORMS) --manifest $(IMAGE) .
-	$(if $(PUSH),podman manifest push --all $(IMAGE) docker://$(IMAGE))
+	$(if $(filter 1,$(PUSH)),podman manifest push --all $(IMAGE) docker://$(IMAGE))
 else
-	docker buildx build $(DOCKER_BUILD_ARGS) --platform $(PLATFORMS) -t $(IMAGE) $(if $(PUSH),--push) .
+	docker buildx build $(DOCKER_BUILD_ARGS) --platform $(PLATFORMS) -t $(IMAGE) $(if $(filter 1,$(PUSH)),--push) .
 endif
 
 itest-up:
