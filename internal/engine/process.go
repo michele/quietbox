@@ -42,14 +42,19 @@ type MoveOutcome struct {
 
 // ProcessReport is what one pass did.
 type ProcessReport struct {
-	Fetched  int // new INBOX messages looked at
-	Skipped  int // left alone: seen, flagged, already moved once, back in INBOX from a typed folder, or a known message that is not a return
-	Stayed   int // classified as staying in INBOX
-	Failed   int
-	Moves    []MoveOutcome
-	Trained  []TrainOutcome // sender routes learned from your moves, in order
-	Warnings []string       // faults that need attention: they make `once` exit non-zero
-	Notes    []string       // information only, e.g. training starting on a folder
+	Fetched int // new INBOX messages looked at
+	Skipped int // left alone: seen, flagged, already moved once, back in INBOX from a typed folder, or a known message that is not a return
+	Stayed  int // classified as staying in INBOX
+	Failed  int
+	Moves   []MoveOutcome
+	// Purged are the blackhole messages the retention sweep moved (or would
+	// move) to Trash; they are not in Moves, so the INBOX counts stay what they were.
+	Purged           []MoveOutcome
+	PurgeKeptFlagged int            // past retention but flagged, so left in the blackhole folder
+	PurgeKeptRescued int            // past retention but restored by `undo`, so left there
+	Trained          []TrainOutcome // sender routes learned from your moves, in order
+	Warnings         []string       // faults that need attention: they make `once` exit non-zero
+	Notes            []string       // information only, e.g. training starting on a folder
 }
 
 // DefaultLockTimeout is how long `once`, `undo` and `init` wait for the pass
@@ -84,8 +89,9 @@ func DaemonLockPath(cfg *config.Config) string { return LockPath(cfg) + ".run" }
 // Order: lock, check the server can MOVE, reconcile interrupted moves (so a
 // crashed move of ours is settled before it could look like yours), check
 // UIDVALIDITY, learn from new Sent mail, learn from mail you moved into the
-// typed folders, then file new INBOX mail. Training comes before INBOX
-// classification, so mail from a sender you just filed goes where you put it.
+// typed folders, then file new INBOX mail, then sweep the blackhole folder (M5).
+// Training comes before INBOX classification, so mail from a sender you just
+// filed goes where you put it.
 func Process(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.Store, o ProcessOptions) (*ProcessReport, error) {
 	if o.Now.IsZero() {
 		o.Now = time.Now()
@@ -133,6 +139,9 @@ func Process(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.
 		return rep, err
 	}
 	if err := processInbox(ctx, b, st, cfg, o, k, targets, pt, rep); err != nil {
+		return rep, err
+	}
+	if err := sweepBlackhole(ctx, cfg, b, st, o, rep); err != nil {
 		return rep, err
 	}
 	return rep, nil
