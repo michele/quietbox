@@ -25,19 +25,19 @@ name = "INBOX"
 type = "important"
 
 [[folder]]
-name = "SaneLater"
+name = "+QuietLater"
 type = "later"
 
 [[folder]]
-name = "SaneNews"
+name = "+QuietNews"
 type = "newsletter"
 
 [[folder]]
-name = "SaneBulk"
+name = "+QuietBulk"
 type = "bulk"          # receipts, notifications, transactional
 
 [[folder]]
-name = "SaneBlackHole" # optional
+name = "+QuietBlackHole" # optional
 type = "blackhole"     # sender blocked; future mail goes to Trash
 ```
 
@@ -86,7 +86,7 @@ Idempotent: safe to re-run at any time as `quietbox learn`.
 7. Print a summary and write `learn-report.csv`: senders per folder, mixed senders,
    overrides. You review it before anything moves.
 
-Options: `--since 2y` to limit scan depth, `--folder SaneNews` to re-learn one folder.
+Options: `--since 2y` to limit scan depth, `--folder +QuietNews` to re-learn one folder.
 
 ### Mixed senders
 

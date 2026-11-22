@@ -33,19 +33,19 @@ name = "INBOX"          # exactly one important folder, and it must be INBOX
 type = "important"
 
 [[folder]]
-name = "SaneLater"      # at least one "later" folder is required
+name = "+QuietLater"      # at least one "later" folder is required
 type = "later"
 
 [[folder]]
-name = "SaneNews"
+name = "+QuietNews"
 type = "newsletter"
 
 [[folder]]
-name = "SaneBulk"
+name = "+QuietBulk"
 type = "bulk"
 
 [[folder]]
-name = "SaneBlackHole"  # optional, at most one
+name = "+QuietBlackHole"  # optional, at most one
 type = "blackhole"
 ```
 
@@ -111,7 +111,7 @@ safe and rebuilds the learned data.
 | `--dry-run` | no folders created, no database written |
 | `--yes`, `-y` | create missing folders without asking (without it, a non-interactive run skips creation) |
 | `--since 2y` | limit scan depth (INBOX is also capped by `inbox_lookback`) |
-| `--folder SaneNews` | re-learn one folder only (needs a previous full run) |
+| `--folder +QuietNews` | re-learn one folder only (needs a previous full run) |
 | `--report path` | where to write the CSV (default `learn-report.csv`, mode 0600; empty to skip) |
 | `--lock-timeout 2m` | how long to wait for another quietbox on this mailbox (see "Locks" below) |
 
@@ -244,7 +244,7 @@ Teach quietbox the way you taught SaneBox, from any mail client:
 - One move is enough and the **last move wins**. Your moves beat everything quietbox learned or detected.
 
 ```sh
-quietbox once            # ... trained writer@news.test: you moved a message from SaneNews to INBOX
+quietbox once            # ... trained writer@news.test: you moved a message from +QuietNews to INBOX
 quietbox senders         # the sender now shows ROUTE INBOX, SOURCE trained
 ```
 
@@ -275,7 +275,7 @@ Training changes only the local database, never the mailbox.
 ### Setting routes by hand: `senders set`, `senders unset`
 
 ```sh
-quietbox senders set promo@deals.test SaneBulk   # always file this sender into SaneBulk
+quietbox senders set promo@deals.test +QuietBulk   # always file this sender into +QuietBulk
 quietbox senders set alice@friends.test INBOX    # always keep this sender in INBOX
 quietbox senders unset promo@deals.test          # remove the trained route
 ```
@@ -293,7 +293,7 @@ quietbox senders unset promo@deals.test          # remove the trained route
 
 ```sh
 quietbox explain '<message-id@example.com>'     # look up by Message-ID (angle brackets optional)
-quietbox explain --folder SaneNews 1234         # or by UID in a folder (default INBOX)
+quietbox explain --folder +QuietNews 1234         # or by UID in a folder (default INBOX)
 ```
 
 `explain` shows what quietbox would decide for that message **now**: the target folder, the rule,
