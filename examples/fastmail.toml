@@ -38,6 +38,10 @@ username = "you@example.com"   # <- your full Fastmail login address
 # skip_seen = true
 # skip_flagged = true
 
+# Mail in the blackhole folder moves to Trash after this long (never deleted by quietbox).
+# [blackhole]
+# retention = "30d"          # "off" keeps it for good
+
 # Folders. INBOX (important) and at least one "later" folder are required.
 # Missing folders are created by `quietbox init`, only after you confirm.
 [[folder]]

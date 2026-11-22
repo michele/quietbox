@@ -1,0 +1,63 @@
+# quietbox config for any IMAP server (your own Dovecot, a hosting provider, ...).
+# Developed against Fastmail and tested against Dovecot; every other server is untried.
+#
+# What the server must offer: IMAP login with a password (OAuth2 is not supported),
+# and the MOVE (RFC 6851) and UIDPLUS (RFC 4315) extensions. quietbox never uses
+# COPY + delete + expunge, so without both it refuses to move anything.
+#   quietbox check --config examples/generic-imap.toml     # lists the capabilities
+#
+# Not supported: Microsoft 365 and Outlook.com (they no longer accept password logins
+# for IMAP and need OAuth2).
+#
+# The password is NOT stored here (quietbox refuses a `password` key on purpose). Either
+#   export QUIETBOX_IMAP_PASSWORD='...'
+# or keep it in a file (chmod 600) or a keychain and uncomment ONE:
+#   password_file = "~/.config/quietbox/mail.pw"
+#   password_command = "pass show mail/example"
+#
+# Folder names: the ones below are plain top-level names. If your server uses a separator
+# (Dovecot defaults to "." or "/"), avoid it inside the names, and use the names exactly
+# as `quietbox check` shows them for existing folders.
+
+[imap]
+host = "mail.example.com"
+username = "you@example.com"
+# tls = "implicit"     # port 993 (default). "starttls" uses port 143.
+#                      # "none" (plain text) is only accepted for localhost.
+# port = 993
+
+# The folder your server keeps sent mail in is found through its \Sent flag. If it has
+# none, name it here (people you have written to stay in INBOX):
+# [learn]
+# sent_folder = "Sent"
+
+# Addresses that are "you" (aliases / custom domains). Defaults to the username.
+# [me]
+# addresses = ["you@example.com", "alias@example.com"]
+
+# Mail in the blackhole folder moves to the server's Trash folder after this long.
+# [blackhole]
+# retention = "30d"          # "off" keeps it for good
+# trash_folder = "Trash"     # only if the server does not flag one with \Trash
+
+# Folders. INBOX (important) and at least one "later" folder are required.
+# Missing ones are created by `quietbox init`, only after you confirm.
+[[folder]]
+name = "INBOX"
+type = "important"
+
+[[folder]]
+name = "QuietLater"
+type = "later"
+
+[[folder]]
+name = "QuietNews"
+type = "newsletter"
+
+[[folder]]
+name = "QuietBulk"
+type = "bulk"
+
+[[folder]]
+name = "QuietBlackHole"      # optional
+type = "blackhole"
