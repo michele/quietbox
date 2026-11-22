@@ -10,11 +10,18 @@ permissions:
   contents: read
   packages: write
 
+# One publish per ref at a time; a newer run waits instead of racing a push.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -25,10 +32,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
-          # v1.2.3 -> 1.2.3 and latest; a manual run -> sha-<short>.
+          # v1.2.3 -> 1.2.3, latest (flavor latest=auto: only for a non-pre-release
+          # semver tag, so v1.0.0-rc1 does not become latest) and sha-<short>;
+          # a manual run -> sha-<short> only.
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha
       - uses: docker/build-push-action@v6
         with:
