@@ -169,6 +169,9 @@ func writeProcessReport(w io.Writer, rep *engine.ProcessReport, dryRun bool) err
 		}
 		_, _ = fmt.Fprintf(w, "%s %d sender(s) from your moves\n", verb, n)
 	}
+	for _, line := range rep.PurgeLines(dryRun) {
+		_, _ = fmt.Fprintln(w, line)
+	}
 	for _, note := range rep.Notes {
 		_, _ = fmt.Fprintf(w, "note: %s\n", note)
 	}

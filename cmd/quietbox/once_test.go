@@ -232,3 +232,22 @@ func TestLockTimeoutFlagRejectedBeforeAnything(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteProcessReportShowsPurges(t *testing.T) {
+	rep := &engine.ProcessReport{Purged: []engine.MoveOutcome{
+		{From: "SaneBlackHole", To: "Trash", Sender: "spam@x.test", Rule: engine.RuleRetention, Status: engine.MoveDone},
+	}}
+	var buf bytes.Buffer
+	_ = writeProcessReport(&buf, rep, false)
+	for _, want := range []string{"moved spam@x.test: SaneBlackHole -> Trash", "moved 1 message(s) from SaneBlackHole to Trash"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("report lacks %q:\n%s", want, buf.String())
+		}
+	}
+	rep.Purged[0].Status = engine.MoveWouldMove
+	buf.Reset()
+	_ = writeProcessReport(&buf, rep, true)
+	if !strings.Contains(buf.String(), "would move 1 message(s) from SaneBlackHole to Trash") {
+		t.Errorf("dry-run report = %s", buf.String())
+	}
+}

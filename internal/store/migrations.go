@@ -102,4 +102,13 @@ CREATE TABLE training (
 );
 CREATE INDEX training_sender ON training(sender);
 `,
+	// 6: when each message was first seen in the blackhole folder, so the
+	// retention sweep counts from arrival there (a move keeps INTERNALDATE).
+	// Keys and times only.
+	`
+CREATE TABLE blackhole_seen (
+	key        TEXT PRIMARY KEY,
+	first_seen INTEGER NOT NULL
+);
+`,
 }

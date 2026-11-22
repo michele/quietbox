@@ -191,7 +191,7 @@ func TestMigrationV2KeepsV1Data(t *testing.T) {
 		ALTER TABLE audit DROP COLUMN status;
 		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
 		ALTER TABLE audit DROP COLUMN dest_uid;
-		DROP TABLE messages; DROP TABLE training; PRAGMA user_version = 1`); err != nil {
+		DROP TABLE blackhole_seen; DROP TABLE messages; DROP TABLE training; PRAGMA user_version = 1`); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -344,7 +344,7 @@ func TestMigration3KeepsOldAuditRows(t *testing.T) {
 		ALTER TABLE audit DROP COLUMN dest_uidvalidity;
 		ALTER TABLE audit DROP COLUMN dest_uid;
 		INSERT INTO audit(action, to_folder, reason, at) VALUES ('create_folder','X','r',1);
-		DROP TABLE messages; DROP TABLE training; PRAGMA user_version = 2`); err != nil {
+		DROP TABLE blackhole_seen; DROP TABLE messages; DROP TABLE training; PRAGMA user_version = 2`); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
@@ -444,7 +444,7 @@ func TestMigration4KeepsOldData(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simulate a database left at schema v3 (no meta table, no backlog column).
-	if _, err := s.db.Exec(`DROP TABLE messages; DROP TABLE training; DROP TABLE meta; ALTER TABLE cursors DROP COLUMN backlog_below; PRAGMA user_version = 3`); err != nil {
+	if _, err := s.db.Exec(`DROP TABLE blackhole_seen; DROP TABLE messages; DROP TABLE training; DROP TABLE meta; ALTER TABLE cursors DROP COLUMN backlog_below; PRAGMA user_version = 3`); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()

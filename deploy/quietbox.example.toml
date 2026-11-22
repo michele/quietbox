@@ -52,3 +52,8 @@ type = "bulk"
 [[folder]]
 name = "+QuietBlackHole"   # optional: senders you never want to see again
 type = "blackhole"
+
+# Mail stays in the blackhole folder for this long, then is moved to Trash (never deleted).
+# [blackhole]
+# retention = "30d"          # "off" keeps everything
+# trash_folder = ""          # default: the folder the server marks \Trash

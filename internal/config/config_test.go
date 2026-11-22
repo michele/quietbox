@@ -264,3 +264,57 @@ func TestRunUnknownKeyRejected(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestBlackholeDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(validBase), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Blackhole.Retention != "30d" || cfg.Blackhole.RetentionDur != 30*24*time.Hour {
+		t.Errorf("retention = %q (%v), want 30d", cfg.Blackhole.Retention, cfg.Blackhole.RetentionDur)
+	}
+	if !cfg.Blackhole.SweepEnabled() {
+		t.Error("the sweep should be on by default")
+	}
+	if cfg.Blackhole.TrashFolder != "" {
+		t.Errorf("trash_folder = %q, want empty (use \\Trash)", cfg.Blackhole.TrashFolder)
+	}
+}
+
+func TestBlackholeOverrides(t *testing.T) {
+	cfg, err := Parse([]byte(validBase+"\n[blackhole]\nretention = \"2w\"\ntrash_folder = \"Deleted\"\n"), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Blackhole.RetentionDur != 14*24*time.Hour || cfg.Blackhole.TrashFolder != "Deleted" {
+		t.Errorf("got %+v", cfg.Blackhole)
+	}
+}
+
+func TestBlackholeRetentionOff(t *testing.T) {
+	cfg, err := Parse([]byte(validBase+"\n[blackhole]\nretention = \"off\"\n"), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Blackhole.SweepEnabled() || cfg.Blackhole.RetentionDur != 0 {
+		t.Errorf("off should disable the sweep: %+v", cfg.Blackhole)
+	}
+}
+
+func TestBlackholeErrors(t *testing.T) {
+	cases := []struct{ name, section, want string }{
+		{"bad duration", "retention = \"soon\"", "blackhole.retention"},
+		{"zero", "retention = \"0d\"", "blackhole.retention"},
+		{"trash is INBOX", "trash_folder = \"INBOX\"", "blackhole.trash_folder"},
+		{"trash is a configured folder", "trash_folder = \"SaneLater\"", "blackhole.trash_folder"},
+		{"unknown key", "purge = true", "blackhole.purge"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Parse([]byte(validBase+"\n[blackhole]\n"+c.section+"\n"), pw)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to mention %q", err, c.want)
+			}
+		})
+	}
+}
