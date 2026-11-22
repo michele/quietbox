@@ -22,6 +22,8 @@ func TestDefaultReportPath(t *testing.T) {
 		{"/srv/mail/state.sqlite", "/srv/mail/state.sqlite.learn-report.csv"},
 		{"/srv/my.db.d/q.db", "/srv/my.db.d/q.learn-report.csv"},
 		{"quietbox.db", "quietbox.learn-report.csv"},
+		{"/srv/state/", "/srv/state/quietbox.learn-report.csv"},
+		{"/srv/state/.db", "/srv/state/quietbox.learn-report.csv"},
 	}
 	for _, c := range cases {
 		if got := defaultReportPath(c.state); got != c.want {
@@ -157,6 +159,26 @@ func TestWriteReportFileFollowsSymlink(t *testing.T) {
 		t.Errorf("target content = %q", got)
 	}
 	assertOnlyEntries(t, dir, "link.csv", "real.csv")
+}
+
+// A dangling symlink is replaced by the report: the user chose that path.
+func TestWriteReportFileReplacesDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link.csv")
+	if err := os.Symlink(filepath.Join(dir, "gone.csv"), link); err != nil {
+		t.Skip("symlinks unsupported:", err)
+	}
+	if err := writeReportFile(link, false, writeString("new")); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("link.csv = %v, %v; want a regular 0600 file", fi, err)
+	}
+	if got, _ := os.ReadFile(link); string(got) != "new" {
+		t.Errorf("content = %q", got)
+	}
+	assertOnlyEntries(t, dir, "link.csv")
 }
 
 func TestEmitReportWarnsInsteadOfFailing(t *testing.T) {

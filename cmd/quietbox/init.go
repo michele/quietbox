@@ -65,7 +65,7 @@ it waits for it, at most --lock-timeout, then fails. A dry run never waits.`,
 	fl.BoolVarP(&f.yes, "yes", "y", false, "create missing folders without asking")
 	fl.BoolVar(&f.fresh, "fresh", false, "account never managed before: do not learn routes from INBOX history")
 	fl.StringVar(&f.backlog, "backlog", "", "with --fresh: let 'once' also sort INBOX mail from this long ago, e.g. 30d")
-	fl.StringVar(&f.report, "report", "", "where to write the CSV report (default: <database name>.learn-report.csv next to the database; empty to skip)")
+	fl.StringVar(&f.report, "report", "", "where to write the CSV report (default: next to the database, e.g. quietbox.db -> quietbox.learn-report.csv; empty to skip)")
 	fl.StringVar(&f.now, "now", "", "treat this date (YYYY-MM-DD) as today; for tests and demos")
 	_ = fl.MarkHidden("now")
 	addLockTimeoutFlag(cmd, &f.lockWait)
@@ -158,7 +158,11 @@ func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
 // account-aware, so two accounts never share a report.
 func defaultReportPath(statePath string) string {
 	dir, file := filepath.Split(statePath)
-	return filepath.Join(dir, strings.TrimSuffix(file, ".db")+".learn-report.csv")
+	name := strings.TrimSuffix(file, ".db")
+	if name == "" { // "/srv/state/" or "/srv/state/.db": no hidden ".learn-report.csv"
+		name = "quietbox"
+	}
+	return filepath.Join(dir, name+".learn-report.csv")
 }
 
 // reportTarget resolves --report: not given means the default next to the
@@ -202,6 +206,13 @@ func writeReportFile(path string, mkdir bool, write func(io.Writer) error) (err 
 			return err
 		}
 	}
+	// Device paths first, before resolving symlinks: /dev/stdout resolves to the
+	// file stdout is redirected to, and renaming over it would lose init's output.
+	if isDevicePath(path) {
+		return writeDevice(path, write)
+	}
+	// A dangling symlink fails to resolve and is replaced by the report itself:
+	// the user chose that path.
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
 	}
@@ -228,6 +239,27 @@ func writeReportFile(path string, mkdir bool, write func(io.Writer) error) (err 
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+func isDevicePath(path string) bool {
+	clean := filepath.Clean(path)
+	return strings.HasPrefix(clean, "/dev/") || strings.HasPrefix(clean, "/proc/")
+}
+
+// writeDevice appends to an existing device path such as /dev/stdout or
+// /dev/null: no create, no truncate, so a redirect target keeps what was
+// already written to it.
+func writeDevice(path string, write func(io.Writer) error) (err error) {
+	out, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+	}()
+	return write(out)
 }
 
 func writeInPlace(path string, write func(io.Writer) error) (err error) {
