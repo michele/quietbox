@@ -355,7 +355,8 @@ quietbox --account fastmail run
   one, with a message telling you to set `[state] path`. Existing databases adopt the account that first
   opens them.
 - For several accounts running as services, use one service per account (for example `quietbox --account gmail run`
-  in its own systemd unit or container). Service files and a Docker image come with M6.
+  in its own systemd unit or container). For Docker, see [Running in Docker](#running-in-docker); systemd
+  units come with M6.
 
 ### Starting on a never-managed account
 
@@ -377,6 +378,24 @@ quietbox --account gmail once                                   # sort it; `undo
   arriving after `init` is touched, as always.
 - With no history the detectors decide alone, so start with a short window and read the dry run
   carefully. Moving mistakes back by hand trains quietbox (see [Training](#training-move-mail-by-hand)).
+
+## Running in Docker
+
+A container image (distroless, non-root, read-only root filesystem) and a compose file run `quietbox run`
+always-on, for example on a NAS: one container per account, the config mounted read-only, the database in
+`./data` on a local disk, the password as a compose secret read through `password_file`.
+
+```sh
+cd deploy                                  # then: .env, config/, data/, secrets/ as in docs/DEPLOY.md
+docker compose -f docker-compose.yml -f docker-compose.build.yml build     # builds quietbox:local
+export QUIETBOX_IMAGE=quietbox:local       # until an image is published to ghcr.io
+docker compose run --rm quietbox init --yes --config /config/quietbox.toml
+docker compose up -d
+```
+
+See **[docs/DEPLOY.md](docs/DEPLOY.md)** for the setup, password options, migrating an existing database,
+backups, updates and troubleshooting. `make docker-build` builds `quietbox:local`; `make docker-buildx`
+builds amd64 + arm64.
 
 ## Development
 

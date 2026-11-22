@@ -450,8 +450,22 @@ INBOX-only history should count as a learned route is something to decide from `
 - `blackhole` folder type: move a message there to block the sender
 
 ### M6: Open-source release
-- Docker image, goreleaser binaries, README (Fastmail, Gmail, generic IMAP; app
-  passwords), example configs incl. a "migrating from SaneBox" guide, LICENSE
+- **Docker image and compose: done.** `Dockerfile` (cross-compiling build stage, distroless static nonroot,
+  base images pinned by digest, allow-list `.dockerignore`), `deploy/docker-compose.yml` (one service per account,
+  non-root, read-only rootfs + `/tmp` tmpfs, all capabilities dropped, no-new-privileges, no ports, password as a
+  compose secret via `password_file`, `working_dir: /data` so `init`'s report lands on the volume),
+  `deploy/docker-compose.build.yml`, `make docker-build` / `docker-buildx`, `.github/workflows/docker.yml`
+  (ghcr.io on `v*` tags and manual runs only) and the guide `docs/DEPLOY.md` (passwords ranked, migrating an
+  existing database, backups, NAS notes, troubleshooting).
+  - Verified with Podman 5.2 + Docker Compose 2.29 against the Dovecot test server: arm64 image `init --yes`,
+    `once`, `run` filing a delivered message, `senders set`/`undo`/`explain` next to the daemon, SIGTERM exit 0;
+    amd64 cross-built (ran `--help` under emulation only); secret uid pitfall and warnings reproduced on the
+    Linux VM filesystem; migration via `sqlite3 .backup` exercised on a throwaway copy.
+  - Not verified: a real NAS, a real provider in the container, amd64 hardware, the publish workflow (no tag
+    pushed, so nothing is on ghcr.io yet), Docker Engine (only Podman).
+- Remaining: goreleaser binaries, a first registry publish (push a `v*` tag) and its verification, systemd
+  units, README (Fastmail, Gmail, generic IMAP; app passwords), example configs incl. a "migrating from SaneBox"
+  guide, LICENSE
 
 ## Ideas (not planned)
 
