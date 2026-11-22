@@ -123,6 +123,9 @@ func runConnected(ctx context.Context, cfg *config.Config, st *store.Store, o Ru
 		if n := rep.TrainedSenders(); n > 0 {
 			say("trained %d sender(s)", n)
 		}
+		for _, line := range rep.PurgeLines(false) {
+			say("%s", line)
+		}
 		for _, n := range rep.Notes {
 			say("note: %s", n)
 		}

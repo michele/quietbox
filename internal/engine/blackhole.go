@@ -236,3 +236,43 @@ func purgeDue(ctx context.Context, b mail.Backend, st *store.Store, o ProcessOpt
 	}
 	return nil
 }
+
+// PurgeLines are the report lines for the blackhole sweep: one per message,
+// then a summary. It is empty when nothing was (or would be) purged, so a
+// quiet sweep stays quiet. Addresses and folder names only.
+func (r *ProcessReport) PurgeLines(dryRun bool) []string {
+	if len(r.Purged) == 0 {
+		return nil
+	}
+	var lines []string
+	done := 0
+	for _, p := range r.Purged {
+		verb := "moved"
+		switch p.Status {
+		case MoveWouldMove:
+			verb = "would move"
+		case MoveFailed:
+			verb = "could not move"
+		}
+		if p.Status != MoveFailed {
+			done++
+		}
+		lines = append(lines, fmt.Sprintf("%s %s: %s -> %s", verb, p.Sender, p.From, p.To))
+	}
+	verb := "moved"
+	if dryRun {
+		verb = "would move"
+	}
+	summary := fmt.Sprintf("%s %d message(s) from %s to %s", verb, done, r.Purged[0].From, r.Purged[0].To)
+	var kept []string
+	if r.PurgeKeptFlagged > 0 {
+		kept = append(kept, fmt.Sprintf("%d flagged", r.PurgeKeptFlagged))
+	}
+	if r.PurgeKeptRescued > 0 {
+		kept = append(kept, fmt.Sprintf("%d restored by undo", r.PurgeKeptRescued))
+	}
+	if len(kept) > 0 {
+		summary += " (kept: " + strings.Join(kept, ", ") + ")"
+	}
+	return append(lines, summary)
+}
