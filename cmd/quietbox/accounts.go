@@ -15,8 +15,9 @@ func newAccountsCmd(_ *options) *cobra.Command {
 		Use:   "accounts",
 		Short: "List the accounts in the config folder (use one with --account NAME)",
 		Long: `Lists the *.toml files in the config folder: each one is an account you can
-select with --account NAME. Every account has its own database and lock file and
-is run by its own quietbox process. Nothing connects to a mailbox.`,
+select with --account NAME. Every account has its own database and its two lock
+files (<database>.lock and <database>.lock.run) and is run by its own quietbox
+process. Nothing connects to a mailbox.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			list, err := config.ListAccounts(os.Getenv)

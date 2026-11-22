@@ -33,6 +33,11 @@ type LearnOptions struct {
 	// With neither, missing folders are skipped.
 	Confirm  func(folder string) (bool, error)
 	Progress func(msg string) // optional progress lines
+	// LockTimeout bounds the wait for the pass lock, which a real run (not
+	// DryRun) holds for the whole call; zero means DefaultLockTimeout.
+	// OnLockWait, if set, is called once after a second of waiting.
+	LockTimeout time.Duration
+	OnLockWait  func()
 }
 
 // FolderScan is one configured folder as seen by Learn.
@@ -77,7 +82,8 @@ type LearnReport struct {
 // Learn scans the configured folders and Sent, resolves a route per sender and
 // domain defaults, and (unless DryRun) stores the result. The only mailbox
 // mutation is creating missing configured folders, each audited first.
-// Nothing is written until every scan has succeeded.
+// Nothing is written until every scan has succeeded. A real run holds the pass
+// lock throughout, waiting for it at most LockTimeout.
 func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.Store, o LearnOptions) (*LearnReport, error) {
 	if o.Now.IsZero() {
 		o.Now = time.Now()
@@ -97,6 +103,16 @@ func Learn(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.St
 		return nil, errors.New("learn: a database is required unless --dry-run")
 	case scoped && st == nil:
 		return nil, errors.New("re-learning one folder needs an existing database: run a full `quietbox init` first")
+	}
+	// A real run writes the database and may create folders: it holds the pass
+	// lock for the whole call, so it never runs alongside a `run` pass, `once`
+	// or `undo`. A dry run changes nothing and never waits.
+	if !o.DryRun {
+		release, err := acquirePassLock(ctx, cfg, o.LockTimeout, o.OnLockWait)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 	}
 	if scoped {
 		if !isConfigured(cfg, o.Folder) {

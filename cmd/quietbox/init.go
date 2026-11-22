@@ -17,14 +17,15 @@ import (
 )
 
 type initFlags struct {
-	since   string
-	folder  string
-	dryRun  bool
-	yes     bool
-	report  string
-	now     string
-	fresh   bool
-	backlog string
+	since    string
+	folder   string
+	dryRun   bool
+	yes      bool
+	report   string
+	now      string
+	fresh    bool
+	backlog  string
+	lockWait string
 }
 
 func newInitCmd(opts *options) *cobra.Command {
@@ -45,7 +46,10 @@ For an account that was never managed by SaneBox or similar, use --fresh: INBOX
 history says nothing about where mail belongs, so it is not learned as routes.
 Add --backlog 30d to let the first 'quietbox once' also consider the INBOX mail
 of the last 30 days (read mail included, flagged mail excluded). init itself
-never moves anything: review with 'quietbox once --dry-run', then run 'once'.`,
+never moves anything: review with 'quietbox once --dry-run', then run 'once'.
+
+While another quietbox works on the same mailbox (a 'run' pass, 'once', 'undo')
+it waits for it, at most --lock-timeout, then fails. A dry run never waits.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return runInit(cmd, opts, f) },
 	}
@@ -59,6 +63,7 @@ never moves anything: review with 'quietbox once --dry-run', then run 'once'.`,
 	fl.StringVar(&f.report, "report", "learn-report.csv", "where to write the CSV report (empty to skip)")
 	fl.StringVar(&f.now, "now", "", "treat this date (YYYY-MM-DD) as today; for tests and demos")
 	_ = fl.MarkHidden("now")
+	addLockTimeoutFlag(cmd, &f.lockWait)
 	return cmd
 }
 
@@ -76,6 +81,10 @@ func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
 		}
 		backlog = d
 	}
+	timeout, err := parseLockTimeout(f.lockWait)
+	if err != nil {
+		return err
+	}
 	cfg, err := opts.loadConfig(false)
 	if err != nil {
 		return err
@@ -88,6 +97,9 @@ func runInit(cmd *cobra.Command, opts *options, f *initFlags) error {
 		Backlog:  backlog,
 		Confirm:  confirmer(cmd),
 		Progress: func(msg string) { _, _ = fmt.Fprintln(cmd.ErrOrStderr(), msg) },
+
+		LockTimeout: timeout,
+		OnLockWait:  lockWaitNotice(cmd),
 	}
 	if lo.Now, err = parseNow(f.now); err != nil {
 		return err

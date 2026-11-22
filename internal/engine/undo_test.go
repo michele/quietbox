@@ -211,7 +211,7 @@ func TestUndoFailsWhenLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	if _, err := Undo(bg, cfg, fake, st, UndoOptions{Now: undoNow, Since: time.Hour}); err == nil || !strings.Contains(err.Error(), "another quietbox") {
+	if _, err := Undo(bg, cfg, fake, st, UndoOptions{Now: undoNow, Since: time.Hour, LockTimeout: 300 * time.Millisecond}); err == nil || !strings.Contains(err.Error(), "another quietbox") {
 		t.Fatalf("err = %v", err)
 	}
 }

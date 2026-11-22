@@ -16,6 +16,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 
+	"github.com/michele/quietbox/internal/engine"
 	"github.com/michele/quietbox/internal/store"
 )
 
@@ -379,23 +380,62 @@ func TestM3RunFilesMailAsItArrives(t *testing.T) {
 	}
 }
 
-func TestM3OnceRefusesAnotherInstance(t *testing.T) {
+func TestM3OnceTimesOutWhileLocked(t *testing.T) {
 	e := newM3Env(t)
-	// A running `quietbox run` holds the lock; once must not act alongside it.
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"run", "--config", e.cfg})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- root.ExecuteContext(ctx) }()
-	time.Sleep(1500 * time.Millisecond)
-
-	_, err := e.run("once")
-	if err == nil || !strings.Contains(err.Error(), "another quietbox") {
-		t.Errorf("once alongside run: err = %v", err)
+	e.deliverBatch()
+	// Another quietbox holds the pass lock (a `run` pass, an `undo`...) and does
+	// not let go: once, undo and init wait --lock-timeout, then fail, changing nothing.
+	lock := e.db + ".lock"
+	release, err := engine.AcquireLock(lock)
+	if err != nil {
+		t.Fatal(err)
 	}
-	cancel()
-	<-done
+	defer release()
+	want := "another quietbox is still running on this mailbox after waiting 1s (lock file " + lock + ")"
+	for _, args := range [][]string{
+		{"once"},
+		{"undo", "--since", "1h"},
+		{"init", "--yes", "--report", ""},
+	} {
+		start := time.Now()
+		out, err := e.run(append(args, "--lock-timeout", "1s")...)
+		waited := time.Since(start)
+		t.Logf("%v alongside a held pass lock (%v): %v\n%s", args, waited.Round(10*time.Millisecond), err, out)
+		if err == nil || err.Error() != want {
+			t.Errorf("%v: err = %v, want %q", args, err, want)
+		}
+		if waited < time.Second {
+			t.Errorf("%v gave up after %v, before --lock-timeout", args, waited)
+		}
+	}
+	if !e.has("INBOX", "<new-news@t>") || !e.has("INBOX", "<new-bulk@t>") {
+		t.Error("mail was moved while another quietbox held the pass lock")
+	}
+}
+
+// Once the other quietbox lets go, a waiting once runs, saying it waited.
+func TestM3OnceWaitsForThePassLock(t *testing.T) {
+	e := newM3Env(t)
+	e.deliverBatch()
+	release, err := engine.AcquireLock(e.db + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2.5 s leaves once a second and a half to connect and still wait the full
+	// second after which it says it is waiting.
+	start := time.Now()
+	go func() {
+		time.Sleep(2500 * time.Millisecond)
+		release()
+	}()
+	out, err := e.run("once", "--lock-timeout", "10s")
+	waited := time.Since(start)
+	t.Logf("once after waiting %v:\n%s", waited.Round(10*time.Millisecond), out)
+	if err != nil {
+		t.Fatalf("once: %v\n%s", err, out)
+	}
+	if strings.Count(out, "waiting for another quietbox...") != 1 || waited < 2400*time.Millisecond {
+		t.Errorf("once did not wait for the lock (or did not say so):\n%s", out)
+	}
+	e.assertFiledAsExpected()
 }

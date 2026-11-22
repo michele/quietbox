@@ -113,6 +113,7 @@ safe and rebuilds the learned data.
 | `--since 2y` | limit scan depth (INBOX is also capped by `inbox_lookback`) |
 | `--folder SaneNews` | re-learn one folder only (needs a previous full run) |
 | `--report path` | where to write the CSV (default `learn-report.csv`, mode 0600; empty to skip) |
+| `--lock-timeout 2m` | how long to wait for another quietbox on this mailbox (see "Locks" below) |
 
 The report lists every sender with its route, whether it is **mixed** (it legitimately appears in
 more than one folder), how many messages it has in each folder, and why.
@@ -182,9 +183,12 @@ Safety:
   stays there.
 - **UIDVALIDITY.** If the server renumbers INBOX or Sent, nothing is moved: quietbox says so and
   asks you to re-run `init`.
-- **One at a time.** A lock file next to the database stops two instances acting on one mailbox
-  (`--dry-run` does not need it). Unix only. `undo` also takes the lock, so stop `quietbox run`
-  before undoing (or use `undo --dry-run` while it runs).
+- **One at a time, with `run` up.** Two lock files next to the database keep quietbox processes from
+  acting on one mailbox at the same time (see "Locks" below). `run` holds its own lock for as long as
+  it runs, so a second `run` on the same mailbox is refused ("another quietbox run is already
+  running"), but it holds the shared one only while a pass is executing. While it waits for mail,
+  `once`, `undo`, `init`, `senders set` and `senders unset` all work; if a pass is in progress they
+  wait for it to end. `--dry-run` takes no lock and never waits. Unix only.
 - `once` exits non-zero if a move failed or it had a warning, so cron mails you.
 - A failed move stays in INBOX and is not retried. `run` retries a lost connection with a growing
   delay (5s up to 5 min) and stops on anything that needs you (no MOVE, nothing learned yet).
@@ -192,6 +196,43 @@ Safety:
   addresses or subjects, so `undo` shows folders and the reason a message was filed.
 - Sender routes change when you re-run `init`, when you move mail by hand (see below) and with
   `senders set`/`unset`.
+
+#### Locks
+
+- **Two lock files**, both next to the database: `<state path>.lock.run`, which only `run` takes, at
+  start, failing at once if another `run` has it; and `<state path>.lock`, the pass lock, which `run`
+  holds only while a pass executes (never while it waits for mail or for a reconnect) and which
+  `once`, `undo`, a real `init`/`learn`, `senders set` and `senders unset` take for their work.
+- **Waiting.** `once`, `undo` and `init`/`learn` wait for the pass lock at most `--lock-timeout`
+  (default `2m`; a Go duration such as `90s`, `2m`, `1m30s`, or `1h`, `1d`), saying "waiting for another
+  quietbox..." after a second, then fail with "another quietbox is still running on this mailbox after
+  waiting 2m0s". The bound is for cron: a hung process does not pile up waiting jobs. `senders
+  set`/`unset` wait without a limit (Ctrl-C stops them); `run` waits for the pass lock before each pass,
+  also without a limit (Ctrl-C or SIGTERM stops it while it waits). It says "waiting for another
+  quietbox... (lock file ...)" after a second and then "still waiting for the pass lock after 15m (lock
+  file ...)" every 5 minutes, so a stuck daemon is visible in its log.
+- **A suspended or hung process still holds its lock.** A `once` stopped with Ctrl-Z (SIGSTOP), or an
+  `init` sitting at its question, is alive, so its lock is held and the others wait: that is what
+  `--lock-timeout` is for, and why `run` keeps saying "still waiting". Find the holder with
+  `lsof <state path>.lock` (or `lsof <state path>.lock.run` for a refused `run`), then resume, finish
+  or stop it.
+- **Never delete the lock files while quietbox is running.** A lock is held on the open file, not on
+  the name: a deleted and re-created `.lock.run` is a new, free lock, so a second `run` could start
+  beside the first (and the same for the pass lock). Leaving them on disk costs nothing.
+- **A dying process never leaves a lock behind.** The locks are `flock(2)` locks, which the kernel drops
+  when the process exits, however it exits (a crash, `kill -9`, the machine losing power). There are no
+  PID files and nothing to clean up: the empty `.lock` and `.lock.run` files stay on disk and are
+  harmless, because only a lock held by a live process means anything.
+- **A real `init`/`learn` holds the pass lock for the whole call**, including while it asks whether to
+  create missing folders and during a long full scan. Meanwhile a running daemon's passes and
+  `senders set` wait, and a cron `once` can time out. For a big `init` with `run` up, use `--yes` (no
+  question to wait on) or stop `run` first.
+- Keep `[state] path` on a **local filesystem**: `flock` on a network filesystem (NFS, SMB) can be
+  unreliable, and quietbox does not try to detect that.
+- **Restart `run` after editing the config.** The daemon keeps the config it started with. `init` and
+  `senders set` work while it is up (their changes to the database are read by the next pass), but a
+  folder you add to the config is not trained from (mail you move there is not learned) until `run`
+  restarts.
 
 ### Training: move mail by hand
 
@@ -243,10 +284,10 @@ quietbox senders unset promo@deals.test          # remove the trained route
   both are checked before waiting for the lock, so a typo fails at once. Addresses are matched lower-case.
 - `unset` removes only a trained route. If the sender had a learned route before you trained it, that
   route comes back at the next `init`/`learn`, not immediately: until then the sender has no route.
-- Both work on the database only (no IMAP login) and take the instance lock, **waiting** for it
-  ("waiting for another quietbox...") rather than failing. `quietbox run` holds the lock for as long as
-  it runs, so **while a daemon is up they wait until it stops**: stop `run`, set the route, start it
-  again (Ctrl-C stops the waiting).
+- Both work on the database only (no IMAP login) and take the pass lock, **waiting** for it
+  ("waiting for another quietbox...") rather than failing (Ctrl-C stops the waiting). With `quietbox run`
+  up they wait at most for the pass in progress: `run` holds the lock only while a pass executes, so
+  while it idles they complete at once, and the next pass of the same daemon already uses the new route.
 
 ### Why did it do that? `explain`
 
@@ -293,7 +334,8 @@ password_file = "/run/secrets/imap-password"     # a file holding just the passw
 
 ### Several accounts
 
-Run **one quietbox process per account**, each with its own config file, database and lock file.
+Run **one quietbox process per account**, each with its own config file, database and two lock files
+(`.lock` and `.lock.run`).
 Put each account's config in the config folder (`~/.config/quietbox/`, or `$XDG_CONFIG_HOME/quietbox/`)
 as `NAME.toml` and select it with `--account`:
 

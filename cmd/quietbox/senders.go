@@ -70,12 +70,11 @@ func newSendersCmd(opts *options) *cobra.Command {
 	return cmd
 }
 
-// lockedState waits for the instance lock (a running `quietbox run` holds it
-// until it stops) and opens the existing state. The returned func releases both.
+// lockedState waits for the pass lock (held by a `run` pass in progress,
+// `once`, `undo`, `init` or another `senders set`/`unset`) and opens the
+// existing state. The returned func releases both.
 func lockedState(cmd *cobra.Command, cfg *config.Config) (*store.Store, func(), error) {
-	release, err := engine.AcquireLockWait(cmd.Context(), engine.LockPath(cfg), func() {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "waiting for another quietbox...")
-	})
+	release, err := engine.AcquireLockWait(cmd.Context(), engine.LockPath(cfg), lockWaitNotice(cmd))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -97,7 +96,7 @@ func newSendersSetCmd(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Validated before waiting, so a typo does not wait for `run` to stop.
+			// Validated before waiting, so a typo does not wait for a pass to end.
 			addr, err := engine.CheckSenderRoute(cfg, args[0], args[1])
 			if err != nil {
 				return err

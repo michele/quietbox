@@ -184,3 +184,51 @@ func TestUndoReportError(t *testing.T) {
 		t.Error("a failed undo should give a non-zero exit")
 	}
 }
+
+func TestParseLockTimeout(t *testing.T) {
+	for in, want := range map[string]time.Duration{
+		"2m": 2 * time.Minute, "1s": time.Second, "90s": 90 * time.Second, "1m30s": 90 * time.Second,
+		"1h": time.Hour, "1d": 24 * time.Hour,
+	} {
+		got, err := parseLockTimeout(in)
+		if err != nil || got != want {
+			t.Errorf("parseLockTimeout(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "0", "0s", "-1s", "abc", "soon", "1x"} {
+		if d, err := parseLockTimeout(bad); err == nil || !strings.Contains(err.Error(), "--lock-timeout") {
+			t.Errorf("parseLockTimeout(%q) = %v, %v; want a --lock-timeout error", bad, d, err)
+		}
+	}
+}
+
+func TestLockTimeoutFlagDefaultsToTwoMinutes(t *testing.T) {
+	root := newRootCmd()
+	for _, name := range []string{"once", "undo", "init"} {
+		c, _, err := root.Find([]string{name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := c.Flags().Lookup("lock-timeout")
+		if f == nil || f.DefValue != "2m" {
+			t.Errorf("%s --lock-timeout = %+v, want default 2m", name, f)
+		}
+	}
+}
+
+// A bad --lock-timeout is a usage error: it fails before opening the database
+// or connecting (the config's server is unreachable and its database missing).
+func TestLockTimeoutFlagRejectedBeforeAnything(t *testing.T) {
+	for _, args := range [][]string{{"once"}, {"undo", "--since", "1h"}, {"init"}} {
+		for _, bad := range []string{"0", "abc", "-5s"} {
+			cfg, db := scanConfig(t)
+			_, err := execRoot(t, append(args, "--config", cfg, "--lock-timeout", bad)...)
+			if err == nil || !strings.Contains(err.Error(), "--lock-timeout") || strings.Contains(err.Error(), "unknown flag") {
+				t.Errorf("%v --lock-timeout %s: err = %v", args, bad, err)
+			}
+			if _, statErr := os.Stat(db); statErr == nil {
+				t.Errorf("%v --lock-timeout %s created a database", args, bad)
+			}
+		}
+	}
+}

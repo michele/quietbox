@@ -16,6 +16,11 @@ type UndoOptions struct {
 	Now    time.Time     // zero means time.Now()
 	Since  time.Duration // undo moves recorded within this long before Now
 	DryRun bool
+	// LockTimeout bounds the wait for the pass lock (real runs only); zero
+	// means DefaultLockTimeout. OnLockWait, if set, is called once after a
+	// second of waiting.
+	LockTimeout time.Duration
+	OnLockWait  func()
 }
 
 // Undo outcomes.
@@ -58,7 +63,7 @@ func Undo(ctx context.Context, cfg *config.Config, b mail.Backend, st *store.Sto
 		return nil, fmt.Errorf("undo needs a time window: --since must be positive")
 	}
 	if !o.DryRun {
-		release, err := AcquireLock(LockPath(cfg))
+		release, err := acquirePassLock(ctx, cfg, o.LockTimeout, o.OnLockWait)
 		if err != nil {
 			return nil, err
 		}
