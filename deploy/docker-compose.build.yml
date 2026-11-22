@@ -1,0 +1,9 @@
+# Override: build the image from this checkout instead of pulling it.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+services:
+  quietbox:
+    image: quietbox:local # same tag as `make docker-build`
+    build:
+      context: ../
+      dockerfile: Dockerfile

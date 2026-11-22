@@ -1,0 +1,60 @@
+# quietbox: one always-on daemon (`quietbox run`) for ONE mailbox account.
+# For a second account, copy this service with its own config, data dir and
+# secret (see docs/DEPLOY.md, "Several accounts").
+#
+#   cp .env.example .env                       # PUID/PGID/TZ/image
+#   mkdir -p config data secrets
+#   cp quietbox.example.toml config/quietbox.toml   # then edit it
+#   printf '%s\n' 'app-password' > secrets/imap_password && chmod 600 secrets/imap_password
+#   docker compose run --rm quietbox init --yes --config /config/quietbox.toml
+#   docker compose up -d
+#
+# Build the image locally instead of pulling it:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+name: quietbox
+
+services:
+  quietbox:
+    image: ${QUIETBOX_IMAGE:-ghcr.io/michele/quietbox:latest}
+    # Must be able to read secrets/imap_password and write data/: use the uid/gid
+    # that owns them on the host (`id` on the NAS), see docs/DEPLOY.md.
+    user: "${PUID:-65532}:${PGID:-65532}"
+    command: ["run", "--config", "/config/quietbox.toml"]
+    # `init` writes learn-report.csv into the working directory; /data is the
+    # only writable place, the rest of the filesystem is read-only.
+    working_dir: /data
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./config:/config:ro
+      # SQLite database and its two lock files. Must be a LOCAL filesystem
+      # (flock is unreliable on NFS/SMB).
+      - ./data:/data
+    secrets:
+      - source: imap_password
+        target: imap_password # -> /run/secrets/imap_password
+    restart: unless-stopped
+    read_only: true
+    # Scratch space in RAM in case SQLite spills a temporary file (large sorts);
+    # nothing quietbox keeps is written here.
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # SIGTERM ends `run` cleanly (it finishes or abandons the pass and exits).
+    stop_grace_period: 30s
+    mem_limit: 512m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # No ports: quietbox only makes outgoing IMAP connections.
+    # No healthcheck: the image has no shell, and `quietbox check` logs in to
+    # IMAP, too heavy to run every few seconds. See docs/DEPLOY.md.
+
+secrets:
+  imap_password:
+    file: ./secrets/imap_password

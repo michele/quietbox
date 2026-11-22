@@ -1,3 +1,13 @@
 bin/
 *.db
 /learn-report.csv
+
+# Docker deployment: real config, state and secrets never get committed.
+/env
+.env
+!.env.example
+/deploy/local/
+/deploy/data/
+/deploy/config/
+/deploy/secrets/*
+!/deploy/secrets/README.md
