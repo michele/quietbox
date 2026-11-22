@@ -463,7 +463,8 @@ INBOX-only history should count as a learned route is something to decide from `
     Linux VM filesystem; migration via `sqlite3 .backup` exercised on a throwaway copy.
   - Not verified: a real NAS, a real provider in the container, amd64 hardware, the publish workflow (no tag
     pushed, so nothing is on ghcr.io yet), Docker Engine (only Podman).
-- Remaining: goreleaser binaries, a first registry publish (push a `v*` tag) and its verification, systemd
+- Remaining: goreleaser binaries, a first registry publish (push a `v*` tag from a green commit, then make the
+  GHCR package public, since GitHub creates it private, or document `docker login ghcr.io`) and its verification, systemd
   units, README (Fastmail, Gmail, generic IMAP; app passwords), example configs incl. a "migrating from SaneBox"
   guide, LICENSE
 

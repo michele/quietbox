@@ -27,8 +27,8 @@ Files: [`Dockerfile`](../Dockerfile), [`deploy/docker-compose.yml`](../deploy/do
   other's locks or audit logs: each treats the other's moves as moves *you* made and trains on them. This
   was reproduced while writing this guide: a NAS copy taken before the laptop filed one more message
   logged `trained promo@deals.test: you moved a message to SaneBulk (route was SaneLater)`, a training
-  event nobody asked for. After [migrating](#migrating-an-existing-database), stop quietbox on the
-  laptop for good (remove its cron job or service).
+  event nobody asked for. When [migrating](#migrating-an-existing-database), retire quietbox on the
+  laptop for good (step 1 there).
 
 ## Prerequisites
 
@@ -46,19 +46,32 @@ Pick one.
 1. **Registry** (default in the compose file): `ghcr.io/michele/quietbox:latest`, or a version tag.
    The image is published by [`.github/workflows/docker.yml`](../.github/workflows/docker.yml), which runs
    only when a `v*` tag is pushed (or by hand from the Actions tab). **Until a tag is pushed, nothing is
-   published and `docker compose pull` fails**: use option 2 meanwhile.
-2. **Build locally with the override** (needs a checkout of the repo on the machine that builds):
+   published and `docker compose pull` fails**: use option 2 meanwhile. Push release tags only from a
+   commit whose CI run is green. A new GHCR package is **private** on its first publish: make it public
+   (GitHub > Packages > quietbox > Package settings > Change visibility), or `docker login ghcr.io` on the
+   NAS with a token that can read packages.
+2. **Build locally** (needs a checkout of the repo on the machine that builds). First set, once and for
+   good, `QUIETBOX_IMAGE=quietbox:local` in `.env`, then build:
 
    ```sh
    cd deploy
    docker compose -f docker-compose.yml -f docker-compose.build.yml build    # tags quietbox:local
-   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
    ```
 
-   or `make docker-build` from the repo root (same `quietbox:local` tag), then set
-   `QUIETBOX_IMAGE=quietbox:local` in `deploy/.env`.
+   or `make docker-build` from the repo root (same tag). Use the override **only for `build`**; every other
+   command (`run --rm`, `up -d`, `exec`) is plain `docker compose` and gets the local image from `.env`.
+   Why it matters: if some commands use `quietbox:local` and others fall back to the registry image, two
+   versions touch one database. A newer one migrates the schema automatically, and the older daemon then
+   refuses to start: `database schema version N is newer than this quietbox understands (M); upgrade quietbox`.
+   (An `export QUIETBOX_IMAGE=...` in one shell is easy to forget in the next; `.env` is read every time.)
+
+   The `Dockerfile` needs BuildKit (`RUN --mount`, `$BUILDPLATFORM`). Docker 23+ uses it by default; older
+   Docker (Synology's Docker 20.10 package, for example) may fall back to the legacy builder and fail: build
+   with `DOCKER_BUILDKIT=1`, or build on another machine and pull or `docker load` the image (option 1 or 3).
 3. **Multi-arch build** (build on a laptop, run on the NAS): `make docker-buildx IMAGE=registry.example/quietbox:1 PUSH=1`
-   builds `linux/amd64` and `linux/arm64` and pushes them. The build stage cross-compiles, so no QEMU is needed.
+   builds `linux/amd64` and `linux/arm64` and pushes them (only `PUSH=1` pushes). The build stage
+   cross-compiles, so no QEMU is needed. With Docker, a multi-platform build needs a `docker-container` builder
+   (`docker buildx create --use`) or the containerd image store; Podman builds a local manifest list.
    Without a registry, build for the NAS architecture and copy the image over:
 
    ```sh
@@ -76,12 +89,14 @@ Base images are pinned by digest in the `Dockerfile`; bump them deliberately.
 ├── .env                           # from deploy/.env.example (PUID, PGID, TZ, QUIETBOX_IMAGE)
 ├── config/quietbox.toml           # your config, mounted read-only at /config
 ├── data/                          # quietbox.db + .lock + .lock.run (+ learn-report.csv), at /data
+├── backups/                       # database backups (see Day-2), not mounted
 └── secrets/imap_password          # the password alone on one line, at /run/secrets/imap_password
 ```
 
 ```sh
-mkdir -p /volume1/docker/quietbox/{config,data,secrets}
+mkdir -p /volume1/docker/quietbox/{config,data,secrets,backups}
 cd /volume1/docker/quietbox
+chmod 700 data backups secrets     # quietbox.db is created 0644 and holds sender addresses and the audit log
 cp /path/to/repo/deploy/docker-compose.yml /path/to/repo/deploy/.env.example .
 cp .env.example .env
 cp /path/to/repo/deploy/quietbox.example.toml config/quietbox.toml   # then edit
@@ -142,15 +157,16 @@ read-only at `/run/secrets/imap_password`.
 
 ```sh
 cd /volume1/docker/quietbox
-umask 077
-printf '%s\n' 'the-app-password' > secrets/imap_password     # or: scp laptop:the-file secrets/imap_password
+scp laptop:path/to/password-file secrets/imap_password   # or write it with an editor (umask 077 first)
 chmod 600 secrets/imap_password
 id                                    # e.g. uid=1026(you) gid=100(users): put these in .env
-sudo chown -R 1026:100 data secrets   # PUID:PGID own the data and the secret
+sudo chown -R 1026:100 data backups secrets   # PUID:PGID own the data and the secret
+chmod 700 data
 ```
 
-(Typing the password on the command line leaves it in the shell history; `scp`, or an editor, avoids
-that. `history -d` or a leading space with `HISTCONTROL=ignorespace` also work.)
+Avoid typing the password on a command line: it lands in the shell history. If you must,
+`umask 077; printf '%s\n' 'the-app-password' > secrets/imap_password` (and clear it from the history
+with `history -d`, or start the line with a space under `HISTCONTROL=ignorespace`).
 
 **The uid pitfall.** Outside Swarm, a compose file secret is a bind mount of the host file: the container sees
 it with its host owner and mode (do not count on the compose `uid`/`gid`/`mode` secret options to change that;
@@ -167,7 +183,9 @@ error: imap.password_file /run/secrets/imap_password: open /run/secrets/imap_pas
 - **Run as the owner (preferred):** set `PUID`/`PGID` in `.env` to the owner of `secrets/imap_password`,
   and own `data/` by the same uid. The file stays `0600`.
 - **Shared group:** keep `PUID=65532`, give the file a group the container is in and make it group-readable:
-  `chgrp 100 secrets/imap_password && chmod 0440 secrets/imap_password`, `PGID=100`. quietbox refuses a
+  `chgrp 100 secrets/imap_password && chmod 0440 secrets/imap_password`, `PGID=100`. `data/` must then be
+  writable by uid 65532 too: `sudo chown -R 65532:100 data` (or keep your owner, `chgrp -R 100 data` and
+  `chmod 770 data`). quietbox refuses a
   group- or world-readable password file outside a container, but inside one it only warns, on every
   command that reads the password:
 
@@ -195,14 +213,17 @@ Simple, but the password is in the container's environment: visible to anyone wh
 `docker inspect` on the host, in `/proc/<pid>/environ` and to child processes. Never write the
 password inline under `environment:` in the compose file (that file gets copied, shared and committed).
 
+Keep the file in `secrets/` (ignored by git like everything there; `*.env` is ignored too), written with an
+editor, or:
+
 ```sh
-umask 077; printf 'QUIETBOX_IMAP_PASSWORD=%s\n' 'the-app-password' > quietbox.env; chmod 600 quietbox.env
+umask 077; printf 'QUIETBOX_IMAP_PASSWORD=%s\n' 'the-app-password' > secrets/quietbox.env; chmod 600 secrets/quietbox.env
 ```
 
 ```yaml
 services:
   quietbox:
-    env_file: [quietbox.env]
+    env_file: [secrets/quietbox.env]
     # and remove `secrets:` here and `password_file` from the config
 ```
 
@@ -230,16 +251,18 @@ credentials, which moves the problem rather than solving it on a single NAS; opt
 
 - **Docker Swarm:** `docker secret create imap_password -` and `secrets: [imap_password]` with
   `external: true`; Swarm honours the `uid`/`gid`/`mode` options, so `uid: "65532"`, `mode: 0400` works.
-- **Kubernetes:** a `Secret` mounted as a volume at `/run/secrets` (`defaultMode: 0400`, `runAsUser: 65532`
-  or `fsGroup`), `password_file = "/run/secrets/imap_password"`.
+- **Kubernetes:** a `Secret` mounted as a volume at `/run/secrets`, `password_file = "/run/secrets/imap_password"`.
+  Secret volume files are owned by root with group = `fsGroup`, so `defaultMode: 0400` with `runAsUser: 65532` is
+  unreadable (permission denied). Use `defaultMode: 0440` with `fsGroup: 65532` (quietbox only warns about the
+  group-readable file inside a container), or `0444`.
 - **systemd without Docker:** `LoadCredential=imap:/etc/quietbox/imap.pw` (or `LoadCredentialEncrypted=`
   after `systemd-creds encrypt`) with `password_file = "${CREDENTIALS_DIRECTORY}/imap"`; see the README.
 
 ### Rotating the password
 
 1. Create the new app password at the provider (keep the old one for now).
-2. Write it **into the existing file**: `printf '%s\n' 'new-password' > secrets/imap_password`.
-   This keeps the file's inode, owner and mode.
+2. Write it **into the existing file**, with an editor that rewrites in place (`vi`, `nano`) or
+   `umask 077; printf '%s\n' 'new-password' > secrets/imap_password`. This keeps the file's inode, owner and mode.
 3. `docker compose restart quietbox`, then check the log for `pass done`.
 4. Revoke the old app password.
 
@@ -255,7 +278,7 @@ replaced file took effect after `restart`).
 
 The password is not needed to restore quietbox: you can always create a new app password. If you back
 the folder up, exclude `secrets/` or keep the backup encrypted; never commit it. This repository's
-`.gitignore` ignores `deploy/secrets/*`, `deploy/config/`, `deploy/data/`, `.env` and `deploy/local/`.
+`.gitignore` ignores `deploy/secrets/*`, `deploy/config/`, `deploy/data/`, `.env`, `*.env` and `deploy/local/`.
 
 ## First run on a new install
 
@@ -296,15 +319,28 @@ writer1@substack.test  SaneNews  sender  done    sender route to SaneNews (learn
 Keep what quietbox has learned (routes, training, audit log for `undo`) by moving the database instead
 of running `init` again.
 
-1. **Stop quietbox on the old machine for good**: stop `quietbox run`, remove the cron entry for
-   `quietbox once`. Nothing may write the database during the copy, and nothing may run against the
-   mailbox from that copy afterwards (see [How it fits together](#how-it-fits-together)).
+0. **Nothing may run on the NAS side yet.** If the project was already created or started (Synology
+   Container Manager's "Create project" starts it by default; with no database `run` exits and
+   `restart: unless-stopped` keeps retrying), stop it, make sure nothing runs, and remove the leftovers of
+   any trial `init`, whose `-wal`/`-shm` files SQLite would otherwise replay onto the migrated file:
+
+   ```sh
+   cd /volume1/docker/quietbox
+   docker compose down
+   docker compose ps                                  # must list nothing
+   rm -f data/quietbox.db-wal data/quietbox.db-shm
+   ```
+1. **Stop quietbox on the old machine for good**: stop `quietbox run`, remove its cron entry, launchd agent
+   or systemd unit (`crontab -l`, `launchctl list | grep -i quietbox`, `systemctl --user list-units | grep -i quietbox`).
+   Nothing may write the database during the copy, and nothing may run against the mailbox from that copy
+   afterwards (see [How it fits together](#how-it-fits-together)).
 2. **Make a consistent copy.** The database uses SQLite WAL mode, so a plain `cp` of a database that some
    process has open can miss the newest data, which lives in `quietbox.db-wal`. Use SQLite's backup, which
    writes one complete file:
 
    ```sh
    # on the laptop; default paths: config.toml -> quietbox.db, --account NAME -> NAME.db
+   umask 077
    sqlite3 ~/.local/state/quietbox/quietbox.db ".backup '/tmp/quietbox.db'"
    sqlite3 /tmp/quietbox.db 'PRAGMA integrity_check;'      # prints: ok
    ```
@@ -313,11 +349,13 @@ of running `init` again.
    `-wal` next to it, leave it behind) and do not copy the `.lock` files; they are recreated.
    (Without `sqlite3`: once every quietbox process has stopped, the `-wal` file is gone or empty and a plain
    copy of `quietbox.db` is consistent.)
-3. **Copy it to the NAS and give it to `PUID:PGID`:**
+3. **Copy it to the NAS under a temporary name, then move it into place** (a rename is atomic, so nothing can
+   ever open a half-copied database), owned by `PUID:PGID`:
 
    ```sh
-   scp /tmp/quietbox.db nas:/volume1/docker/quietbox/data/quietbox.db
-   ssh nas 'sudo chown 1026:100 /volume1/docker/quietbox/data/quietbox.db && sudo chmod 600 /volume1/docker/quietbox/data/quietbox.db'
+   scp /tmp/quietbox.db nas:/volume1/docker/quietbox/data/quietbox.db.tmp
+   ssh nas 'cd /volume1/docker/quietbox/data && sudo chown 1026:100 quietbox.db.tmp && sudo chmod 600 quietbox.db.tmp && mv quietbox.db.tmp quietbox.db'
+   rm -f /tmp/quietbox.db /tmp/quietbox.db-wal /tmp/quietbox.db-shm      # on the laptop
    ```
 
    With `[state] path = "/data/quietbox.db"`, the file name in `data/` must be `quietbox.db`. An
@@ -335,7 +373,16 @@ of running `init` again.
    On the test copy: `senders` listed the learned routes (`campaign@mcsv.test  SaneNews  learned ...`),
    `explain` showed the audit row of a move the old copy had made, and `once --dry-run` ended
    `0 new, 0 would move, ...`, i.e. it continued from where the old copy stopped instead of re-sweeping INBOX.
-6. `docker compose up -d`. Keep the laptop copy as a backup, and never run quietbox with it again.
+6. `docker compose up -d`.
+7. **Retire the laptop's state** so nothing there can become a second daemon:
+
+   ```sh
+   mv ~/.local/state/quietbox ~/.local/state/quietbox.migrated-$(date +%F)
+   ```
+
+   That keeps it as a backup. Afterwards `once`, `run`, `undo` and `senders` on the laptop fail with
+   `error: no quietbox database yet: run \`quietbox init\` first` instead of acting on the mailbox (only
+   `init` creates a database). **Never run `init` on the laptop again** for a migrated account.
 
 ## Day-2 operations
 
@@ -370,7 +417,9 @@ lines (and `still waiting for the pass lock after 15m` if a lock is held).
 ### Commands next to the daemon
 
 Use `docker compose exec` (inside the running container) or `docker compose run --rm` (a throwaway
-container with the same mounts). Both share the database and the locks with the daemon:
+container with the same mounts). Both use the daemon's database. Commands that change something
+(`once`, `undo`, `init`, `senders set`/`unset`) take the pass lock; read-only ones (`senders` listing,
+`explain`, any `--dry-run`) take no lock and never wait:
 
 ```sh
 docker compose exec quietbox /quietbox senders --config /config/quietbox.toml
@@ -380,8 +429,8 @@ docker compose run --rm quietbox undo --since 1h --dry-run --config /config/quie
 docker compose run --rm quietbox undo --since 1h --config /config/quietbox.toml
 ```
 
-`run` holds the pass lock only while a pass executes, so these complete at once while it idles and
-otherwise wait for the pass to end (`waiting for another quietbox...`). Verified: `senders set` with the
+`run` holds the pass lock only while a pass executes, so the locking commands complete at once while it
+idles and otherwise wait for the pass to end (`waiting for another quietbox...`). Verified: `senders set` with the
 daemon up printed `promo@deals.test -> SaneBulk (trained)` and the daemon's next pass used the route.
 Do not start a second `run` (`docker compose run --rm quietbox` with no arguments): it is refused with
 `another quietbox run is already running on this mailbox`.
@@ -390,35 +439,54 @@ Do not start a second `run` (`docker compose run --rm quietbox` with no argument
 
 ```sh
 # 1. back up the database first (below): schema migrations run automatically when a new version opens it
-docker compose pull                    # registry image; or rebuild with the override
+# 2a. registry image:
+docker compose pull
+# 2b. or local build (QUIETBOX_IMAGE=quietbox:local in .env; the override is only for building):
+docker compose -f docker-compose.yml -f docker-compose.build.yml build
+# 3.
 docker compose up -d                   # recreates the container; SIGTERM stops the old one cleanly
 docker compose logs --tail 20 quietbox
 ```
 
 Pin a version tag (`QUIETBOX_IMAGE=ghcr.io/michele/quietbox:1.2.3`) instead of `latest` if you want
-updates only when you choose. Rolling back to an older image after a migration may not work: restore the
-backup taken in step 1.
+updates only when you choose. An older image cannot open a database a newer one has migrated; it stops with
+`database schema version N is newer than this quietbox understands (M); upgrade quietbox`. To roll back,
+restore the backup taken in step 1 (see the caveat under Restoring).
 
 ### Backing up the database
 
-Simplest, with a few seconds of downtime (a cleanly stopped quietbox leaves no `-wal` file, so the copy is
-consistent):
+Keep backups in `backups/` (`mkdir -p backups && chmod 700 backups`, owned by `PUID:PGID`): they hold the
+same sender addresses and audit log as the database.
 
-```sh
-docker compose stop quietbox && cp -p data/quietbox.db backups/quietbox-$(date +%F).db && docker compose start quietbox
-```
-
-Online, with the daemon up, through a throwaway container (`su-exec` runs `sqlite3` as `PUID:PGID`; running
-it as root could leave root-owned `-wal`/`-shm` files the daemon cannot open):
+Preferred, online, with the daemon up, through a throwaway container (`su-exec` runs `sqlite3` as your
+`PUID:PGID`, here `1026:100`; running it as root could leave root-owned `-wal`/`-shm` files the daemon
+cannot open):
 
 ```sh
 docker run --rm -v "$PWD/data:/data" -v "$PWD/backups:/backups" alpine:3.22 \
   sh -c 'apk add -q sqlite su-exec && su-exec 1026:100 sqlite3 /data/quietbox.db ".backup /backups/quietbox.db"'
 ```
 
-(`backups/` must exist and be writable by that uid. On Synology, a Hyper Backup task over the
-`docker/quietbox/backups` folder then takes it off the box.) Restore: stop the service, put the file back as
-`data/quietbox.db` owned by `PUID:PGID`, start.
+Or with a few seconds of downtime. A cleanly stopped quietbox leaves no `-wal` file; one killed after the
+30 s grace period (SIGKILL) can, and then a plain copy misses its contents. Check before copying:
+
+```sh
+docker compose stop quietbox
+test -s data/quietbox.db-wal && echo "WAL not empty: use the sqlite3 .backup recipe instead"
+cp -p data/quietbox.db backups/quietbox-$(date +%F).db
+docker compose start quietbox
+```
+
+On Synology, a Hyper Backup task over `docker/quietbox/backups` then takes it off the box.
+
+**Restoring:** stop the service, copy the backup to `data/quietbox.db.tmp`, remove `data/quietbox.db-wal` and
+`data/quietbox.db-shm`, `chown PUID:PGID`, `mv` it over `data/quietbox.db`, start. Caveat: moves the daemon
+made after that backup are missing from the restored audit log. The next pass sees those messages in their
+folders as moves *you* made and trains their senders on them (training only recognises audited moves as
+quietbox's own); trained routes are never overwritten by a later `init`, and `undo` cannot reverse moves that
+are no longer in the log. So restore only a backup taken just before (a failed update, say), or review
+afterwards with `docker compose run --rm quietbox senders --config /config/quietbox.toml` and fix routes with
+`senders set`/`unset`.
 
 ### Stopping
 
@@ -428,10 +496,12 @@ start (the audit log is written before every move).
 
 ### Resources
 
-Idle on the test mailbox: about 2 MB RAM, 7 threads, no CPU. A pass reads the database's message table, so
-memory grows with the mailbox; the `mem_limit: 512m` and `pids_limit: 128` are generous caps, not measurements
-of a large real mailbox. Raise `mem_limit` if the container is ever OOM-killed (`docker inspect` shows
-`OOMKilled: true`).
+Idle on the test mailbox: about 10 MB resident (RSS 9.6 MB; `podman stats` showed only 2 MB, the cgroup's
+anonymous-memory charge), 7 threads, no CPU. A pass reads the database's message table, so memory grows with
+the mailbox; `mem_limit: 512m` and `pids_limit: 128` are generous caps, not measurements of a large real
+mailbox. `GOMEMLIMIT: 400MiB` makes the Go runtime collect garbage harder before it reaches the container
+limit (Go does not size its heap to the cgroup on its own); raise both together if the container is ever
+OOM-killed (`docker inspect` shows `OOMKilled: true`).
 
 ### Time zone
 
@@ -446,7 +516,7 @@ secret. YAML anchors keep it short:
 
 ```yaml
 services:
-  quietbox:          &qb   # ... the service from deploy/docker-compose.yml ...
+  quietbox:          &qb   # ... the service from deploy/docker-compose.yml, with ./data/main:/data ...
   quietbox-work:
     <<: *qb
     command: ["run", "--config", "/config/work.toml"]
@@ -461,7 +531,8 @@ secrets:
     file: ./secrets/work_imap_password
 ```
 
-(`<<: *qb` merges the mapping, but lists such as `volumes` are replaced, not merged, so repeat them.)
+(`<<: *qb` merges the mapping, but lists such as `volumes` are replaced, not merged, so repeat them. Give
+each account a sibling directory, `./data/main` and `./data/work`, never one inside the other's `/data`.)
 `work.toml` uses `[state] path = "/data/work.db"` and the same `password_file`. One-shot commands name
 the service and its config: `docker compose run --rm quietbox-work init --yes --config /config/work.toml`.
 
@@ -475,8 +546,10 @@ the service and its config: `docker compose run --rm quietbox-work init --yes --
 - **Synology Container Manager:** create the folder with File Station (`docker/quietbox` with `config`,
   `data`, `secrets`), upload the files (the secret via SSH/`scp` is better than the web UI), then
   Container Manager > Project > Create, path `/volume1/docker/quietbox`, source "Use existing
-  docker-compose.yml". Run the one-shot `init` over SSH (`sudo docker compose run --rm ...` in that folder)
-  before starting the project.
+  docker-compose.yml". **Untick "Start the project once it is created"** (or stop the project right away)
+  until `init` or the migration is done: started without a database, `run` exits and the restart policy
+  keeps retrying, and a running project must not see a half-copied database. Run the one-shot `init` (or
+  migrate) over SSH (`sudo docker compose run --rm ...` in that folder), then start the project.
 - **Portainer:** Stacks > Add stack, paste the compose file, set the `.env` values as stack environment
   variables. Relative paths like `./data` resolve inside Portainer's own data directory, so use absolute paths
   (`/volume1/docker/quietbox/data`) in a pasted stack.
@@ -496,7 +569,7 @@ What the compose file sets, and why:
 | `security_opt: no-new-privileges:true` | nothing in the container can gain privileges through setuid binaries (there are none either). |
 | no `ports:` | nothing listens; the only traffic is the outgoing IMAP connection. |
 | `/config` read-only, password as a secret file | a compromised process cannot rewrite its config, and the password is not in the environment. |
-| `mem_limit`, `pids_limit`, log rotation | a runaway process cannot take the NAS down or fill its disk with logs. |
+| `mem_limit` (+ `GOMEMLIMIT`), `pids_limit`, log rotation | a runaway process cannot take the NAS down or fill its disk with logs. |
 | distroless base, pinned by digest | no shell, no package manager, no surprise base-image changes. |
 
 Checked on the running container: user `65532:65532`, read-only root filesystem, every capability dropped,

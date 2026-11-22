@@ -386,10 +386,10 @@ always-on, for example on a NAS: one container per account, the config mounted r
 `./data` on a local disk, the password as a compose secret read through `password_file`.
 
 ```sh
-cd deploy                                  # then: .env, config/, data/, secrets/ as in docs/DEPLOY.md
-docker compose -f docker-compose.yml -f docker-compose.build.yml build     # builds quietbox:local
-export QUIETBOX_IMAGE=quietbox:local       # until an image is published to ghcr.io
-docker compose run --rm quietbox init --yes --config /config/quietbox.toml
+cd deploy                                  # then: config/, data/, secrets/ as in docs/DEPLOY.md
+cp .env.example .env                       # set QUIETBOX_IMAGE=quietbox:local there for a local build
+docker compose -f docker-compose.yml -f docker-compose.build.yml build     # the override only for building
+docker compose run --rm quietbox init --yes --config /config/quietbox.toml # or migrate an existing database
 docker compose up -d
 ```
 
