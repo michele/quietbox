@@ -97,6 +97,26 @@ type Run struct {
 
 func defaultRun() Run { return Run{SkipSeen: true, SkipFlagged: true} }
 
+// RetentionOff is the retention value that turns the blackhole sweep off.
+const RetentionOff = "off"
+
+// Blackhole tunes the retention sweep of the blackhole folder: mail that has
+// been there longer than Retention is moved to Trash (never deleted). It does
+// nothing when no blackhole folder is configured.
+type Blackhole struct {
+	Retention string `toml:"retention"` // e.g. "30d"; "off" disables the sweep
+	// TrashFolder names the folder the sweep moves mail to. Empty means the
+	// folder the server flags \Trash.
+	TrashFolder string `toml:"trash_folder"`
+
+	RetentionDur time.Duration `toml:"-"` // zero when the sweep is off
+}
+
+func defaultBlackhole() Blackhole { return Blackhole{Retention: "30d"} }
+
+// SweepEnabled reports whether the retention sweep is on.
+func (b Blackhole) SweepEnabled() bool { return b.RetentionDur > 0 }
+
 // State locates the SQLite database.
 type State struct {
 	Path string `toml:"path"`
@@ -104,12 +124,13 @@ type State struct {
 
 // Config is the whole configuration file.
 type Config struct {
-	IMAP    IMAP     `toml:"imap"`
-	Me      Me       `toml:"me"`
-	Learn   Learn    `toml:"learn"`
-	Run     Run      `toml:"run"`
-	State   State    `toml:"state"`
-	Folders []Folder `toml:"folder"`
+	IMAP      IMAP      `toml:"imap"`
+	Me        Me        `toml:"me"`
+	Learn     Learn     `toml:"learn"`
+	Run       Run       `toml:"run"`
+	Blackhole Blackhole `toml:"blackhole"`
+	State     State     `toml:"state"`
+	Folders   []Folder  `toml:"folder"`
 
 	// Account is the --account name this configuration was loaded for ("" when
 	// loaded by path). It only affects the password lookup and the default
@@ -182,7 +203,7 @@ func ParseAccount(data []byte, getenv func(string) string, account string) (*Con
 }
 
 func parse(data []byte, getenv func(string) string, account string, requirePassword bool) (*Config, error) {
-	cfg := Config{Learn: defaultLearn(), Run: defaultRun(), Account: account}
+	cfg := Config{Learn: defaultLearn(), Run: defaultRun(), Blackhole: defaultBlackhole(), Account: account}
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -296,6 +317,7 @@ func (c *Config) validate(requirePassword bool) error {
 	}
 
 	c.validateLearn(add)
+	c.validateBlackhole(add)
 
 	seen := map[string]bool{}
 	count := map[FolderType]int{}
@@ -436,6 +458,30 @@ func (c *Config) validateLearn(add func(string, ...any)) {
 	} {
 		if v <= 0 || v > 1 {
 			add("learn.%s must be in (0, 1] (got %v)", name, v)
+		}
+	}
+}
+
+func (c *Config) validateBlackhole(add func(string, ...any)) {
+	b := &c.Blackhole
+	if strings.EqualFold(strings.TrimSpace(b.Retention), RetentionOff) {
+		b.RetentionDur = 0
+	} else {
+		d, err := ParseDuration(b.Retention)
+		if err != nil {
+			add("blackhole.retention: %v (or %q to turn the sweep off)", err, RetentionOff)
+		}
+		b.RetentionDur = d
+	}
+	if b.TrashFolder == "" {
+		return
+	}
+	if b.TrashFolder == "INBOX" {
+		add("blackhole.trash_folder cannot be INBOX")
+	}
+	for _, f := range c.Folders {
+		if f.Name == b.TrashFolder {
+			add("blackhole.trash_folder %q is one of your configured folders; it must be your Trash", b.TrashFolder)
 		}
 	}
 }
