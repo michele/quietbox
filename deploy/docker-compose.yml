@@ -22,9 +22,6 @@ services:
     # that owns them on the host (`id` on the NAS), see docs/DEPLOY.md.
     user: "${PUID:-65532}:${PGID:-65532}"
     command: ["run", "--config", "/config/quietbox.toml"]
-    # `init` writes learn-report.csv into the working directory; /data is the
-    # only writable place, the rest of the filesystem is read-only.
-    working_dir: /data
     environment:
       TZ: ${TZ:-UTC}
       # Go does not size its heap to the cgroup limit: keep it under mem_limit.
