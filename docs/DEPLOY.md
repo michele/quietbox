@@ -88,7 +88,7 @@ Base images are pinned by digest in the `Dockerfile`; bump them deliberately.
 ├── docker-compose.yml             # from deploy/
 ├── .env                           # from deploy/.env.example (PUID, PGID, TZ, QUIETBOX_IMAGE)
 ├── config/quietbox.toml           # your config, mounted read-only at /config
-├── data/                          # quietbox.db + .lock + .lock.run (+ learn-report.csv), at /data
+├── data/                          # quietbox.db + .lock + .lock.run + quietbox.learn-report.csv, at /data
 ├── backups/                       # database backups (see Day-2), not mounted
 └── secrets/imap_password          # the password alone on one line, at /run/secrets/imap_password
 ```
@@ -127,15 +127,10 @@ path = "/data/quietbox.db"
 | `TZ` | `UTC` | IANA time zone for the times `undo` and `explain` print (`2026-11-22 08:40`); the image has tzdata. |
 | `QUIETBOX_IMAGE` | `ghcr.io/michele/quietbox:latest` | image to run; `quietbox:local` for a local build. |
 
-The compose file sets `working_dir: /data` because `init` writes `learn-report.csv` into the current
-directory, and the rest of the filesystem is read-only. Without it (for example in your own `docker run`):
-
-```
-error: write report: open learn-report.csv: read-only file system
-```
-
-and a real `init` would exit with an error **after** saving what it learned. Pass `--report /data/learn-report.csv`
-(or `--report ''`) if you run the image another way.
+`init` writes its report next to the database (`/data/quietbox.learn-report.csv` for
+`/data/quietbox.db`), so it works on the read-only root filesystem without extra settings. If the report
+cannot be written (an explicit `--report` path outside `/data`), `init` prints a warning and still exits 0:
+what it learned is already saved.
 
 **Restart after editing the config**: `docker compose restart quietbox` (the daemon keeps the config it
 started with).
@@ -301,9 +296,9 @@ docker compose up -d                                                         # s
 For an account no tool ever sorted, use `init --fresh` (and optionally `--backlog 30d`, then
 `once --dry-run` and `once`), as in the README's "Starting on a never-managed account".
 
-`init` output ends with `Report written to learn-report.csv`: that is `data/learn-report.csv` on the
-host (mode 0600, it lists sender addresses). Starting the daemon before `init` fails at once with
-`error: no quietbox database yet: run \`quietbox init\` first`.
+`init` output ends with `Report written to /data/quietbox.learn-report.csv`: that is
+`data/quietbox.learn-report.csv` on the host (mode 0600, it lists sender addresses). Starting the
+daemon before `init` fails at once with `error: no quietbox database yet: run \`quietbox init\` first`.
 
 Only mail that arrives **after** `init` is ever moved. The first `once` against the test server:
 

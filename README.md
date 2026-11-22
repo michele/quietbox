@@ -95,7 +95,7 @@ It is read-only.
 ### Learning: `init` (alias `learn`)
 
 ```sh
-quietbox init --dry-run     # see what it would do; changes nothing, still writes learn-report.csv
+quietbox init --dry-run     # see what it would do; changes nothing, still writes the report
 quietbox init               # create missing folders (asks first), learn, save
 quietbox senders --mixed    # review what was learned (database only, no IMAP login)
 ```
@@ -103,16 +103,19 @@ quietbox senders --mixed    # review what was learned (database only, no IMAP lo
 `init` reads message **headers only**, in read-only mode: nothing is marked as read and no
 message body is downloaded. It scans the configured folders, Sent (the strongest "important"
 signal) and the last `inbox_lookback` of INBOX, works out a route for every sender, and writes
-`learn-report.csv` so you can review the result before any mail is ever moved. Re-running it is
-safe and rebuilds the learned data.
+a CSV report next to the database (whatever `[state] path` is), named after it: e.g.
+`~/.local/state/quietbox/quietbox.learn-report.csv`, or `auralis.learn-report.csv` with
+`--account auralis` when `[state] path` is unset. Review it before any mail is ever moved.
+Re-running `init` is safe, rebuilds the learned data and replaces the report. An old
+`learn-report.csv` in the working directory is no longer written (nor deleted).
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | no folders created, no database written |
+| `--dry-run` | no folders created, no database written (the report is, creating the state directory if needed) |
 | `--yes`, `-y` | create missing folders without asking (without it, a non-interactive run skips creation) |
 | `--since 2y` | limit scan depth (INBOX is also capped by `inbox_lookback`) |
 | `--folder +QuietNews` | re-learn one folder only (needs a previous full run) |
-| `--report path` | where to write the CSV (default `learn-report.csv`, mode 0600; empty to skip) |
+| `--report path` | where to write the CSV instead (default `<database name>.learn-report.csv` next to the database; mode 0600, replaced atomically; `--report ''` to skip). If it cannot be written, `init` prints a warning and still succeeds: what it learned is already saved |
 | `--lock-timeout 2m` | how long to wait for another quietbox on this mailbox (see "Locks" below) |
 
 The report lists every sender with its route, whether it is **mixed** (it legitimately appears in
