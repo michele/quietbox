@@ -3,15 +3,17 @@
 # secret (see docs/DEPLOY.md, "Several accounts").
 #
 #   cp .env.example .env                       # PUID/PGID/TZ/image
-#   mkdir -p config data secrets
+#   mkdir -p config data secrets && chmod 700 data
 #   cp quietbox.example.toml config/quietbox.toml   # then edit it
-#   printf '%s\n' 'app-password' > secrets/imap_password && chmod 600 secrets/imap_password
+#   scp laptop:path/to/password-file secrets/imap_password && chmod 600 secrets/imap_password
 #   docker compose run --rm quietbox init --yes --config /config/quietbox.toml
+#     (or migrate an existing database instead: docs/DEPLOY.md, "Migrating")
 #   docker compose up -d
 #
-# Build the image locally instead of pulling it:
+# Build the image locally instead of pulling it (and set QUIETBOX_IMAGE=quietbox:local
+# in .env, so every later command uses that image):
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml build
-name: quietbox
+name: quietbox-deploy
 
 services:
   quietbox:
@@ -25,6 +27,8 @@ services:
     working_dir: /data
     environment:
       TZ: ${TZ:-UTC}
+      # Go does not size its heap to the cgroup limit: keep it under mem_limit.
+      GOMEMLIMIT: 400MiB
     volumes:
       - ./config:/config:ro
       # SQLite database and its two lock files. Must be a LOCAL filesystem
