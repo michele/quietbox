@@ -366,7 +366,7 @@ of running `init` again.
 
    ```sh
    docker compose run --rm quietbox senders --config /config/quietbox.toml | head -5
-   docker compose run --rm quietbox explain --folder SaneNews --config /config/quietbox.toml '<some-message-id@example.com>'
+   docker compose run --rm quietbox explain --folder +QuietNews --config /config/quietbox.toml '<some-message-id@example.com>'
    docker compose run --rm quietbox once --dry-run --config /config/quietbox.toml
    ```
 
@@ -424,7 +424,7 @@ container with the same mounts). Both use the daemon's database. Commands that c
 ```sh
 docker compose exec quietbox /quietbox senders --config /config/quietbox.toml
 docker compose exec quietbox /quietbox explain --config /config/quietbox.toml '<id@example.com>'
-docker compose run --rm quietbox senders set promo@deals.test SaneBulk --config /config/quietbox.toml
+docker compose run --rm quietbox senders set promo@deals.test +QuietBulk --config /config/quietbox.toml
 docker compose run --rm quietbox undo --since 1h --dry-run --config /config/quietbox.toml
 docker compose run --rm quietbox undo --since 1h --config /config/quietbox.toml
 ```
