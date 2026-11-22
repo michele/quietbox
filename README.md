@@ -103,9 +103,11 @@ quietbox senders --mixed    # review what was learned (database only, no IMAP lo
 `init` reads message **headers only**, in read-only mode: nothing is marked as read and no
 message body is downloaded. It scans the configured folders, Sent (the strongest "important"
 signal) and the last `inbox_lookback` of INBOX, works out a route for every sender, and writes
-a CSV report next to the database, named after it (`~/.local/state/quietbox/quietbox.learn-report.csv`,
-or `auralis.learn-report.csv` with `--account auralis`), so you can review the result before any
-mail is ever moved. Re-running it is safe, rebuilds the learned data and replaces the report.
+a CSV report next to the database (whatever `[state] path` is), named after it: e.g.
+`~/.local/state/quietbox/quietbox.learn-report.csv`, or `auralis.learn-report.csv` with
+`--account auralis` when `[state] path` is unset. Review it before any mail is ever moved.
+Re-running `init` is safe, rebuilds the learned data and replaces the report. An old
+`learn-report.csv` in the working directory is no longer written (nor deleted).
 
 | Flag | Meaning |
 |---|---|
