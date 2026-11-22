@@ -1,0 +1,54 @@
+# quietbox config for a container (Fastmail example).
+# Copy to config/quietbox.toml and change `username` (and the folders if you like).
+#
+# The password is NOT stored here (quietbox refuses a `password` key on purpose).
+# Create an app password (Fastmail: Settings > Privacy & Security > Integrations >
+# New app password, access "Mail (IMAP)"; Gmail: an App Password with 2-step
+# verification on) and put it, alone on one line, in secrets/imap_password.
+# Compose mounts that file at /run/secrets/imap_password.
+
+[imap]
+host = "imap.fastmail.com"
+username = "you@example.com"   # <- your full login address
+# port = 993                   # default; tls = "implicit" is the default too
+password_file = "/run/secrets/imap_password"
+
+# Addresses that are "you" (aliases / custom domains). Defaults to the username.
+# [me]
+# addresses = ["you@example.com", "alias@yourdomain.com"]
+
+# Defaults are sensible; uncomment to tune.
+# [learn]
+# inbox_lookback = "6mo"
+
+# Mail you have already read or flagged stays where it is (both default to true).
+# [run]
+# skip_seen = true
+# skip_flagged = true
+
+# The database lives on the ./data volume. The two lock files (.lock, .lock.run)
+# are created next to it. Keep it on a local filesystem, not NFS/SMB.
+[state]
+path = "/data/quietbox.db"
+
+# Folders. INBOX (important) and at least one "later" folder are required.
+# Missing folders are created by `quietbox init --yes`.
+[[folder]]
+name = "INBOX"
+type = "important"
+
+[[folder]]
+name = "SaneLater"
+type = "later"
+
+[[folder]]
+name = "SaneNews"
+type = "newsletter"
+
+[[folder]]
+name = "SaneBulk"        # receipts, notifications, order updates
+type = "bulk"
+
+[[folder]]
+name = "SaneBlackHole"   # optional: senders you never want to see again
+type = "blackhole"
