@@ -1,0 +1,27 @@
+# The same daemon as a *user* service, for a laptop or a box where you have no root.
+# Install as ~/.config/systemd/user/quietbox@.service, then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now quietbox@fastmail
+#   loginctl enable-linger "$USER"      # keep it running when you are logged out
+# The account's config is ~/.config/quietbox/<name>.toml and its database
+# ~/.local/state/quietbox/<name>.db (quietbox's own defaults for --account). Run
+# `quietbox --account <name> init` once first. See docs/SYSTEMD.md.
+[Unit]
+Description=quietbox mail triage (%i)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=%S/quietbox/%i.db
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/quietbox --account %i run
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+Environment=GOMEMLIMIT=400MiB
+
+[Install]
+WantedBy=default.target

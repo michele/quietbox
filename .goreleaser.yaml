@@ -26,6 +26,13 @@ archives:
       - README.md
       - deploy/quietbox.example.toml
       - examples/*
+      - docs/SYSTEMD.md
+      - src: deploy/systemd/quietbox@.service
+        dst: deploy/systemd/quietbox@.service
+      - src: deploy/systemd/quietbox.sysusers
+        dst: deploy/systemd/quietbox.sysusers
+      - src: deploy/systemd/user/quietbox@.service
+        dst: deploy/systemd/user/quietbox@.service
 
 checksum:
   name_template: checksums.txt
