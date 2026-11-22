@@ -83,7 +83,8 @@ Idempotent: safe to re-run at any time as `quietbox learn`.
    - you have sent mail to them: `important`, unless a non-inbox folder holds a clear majority
 6. Derive **domain defaults**: when most known senders from a domain share a route,
    a new sender from that domain inherits it (e.g. a new `@substack.com` sender → news).
-7. Print a summary and write `learn-report.csv`: senders per folder, mixed senders,
+7. Print a summary and write the CSV report next to the database (`quietbox.learn-report.csv`,
+   `<account>.learn-report.csv`; `--report` overrides): senders per folder, mixed senders,
    overrides. You review it before anything moves.
 
 Options: `--since 2y` to limit scan depth, `--folder +QuietNews` to re-learn one folder.
@@ -165,7 +166,7 @@ Each one ends with a demo against the docker test server and a tagged commit.
 - read-only header scanning (EXAMINE + `BODY.PEEK[HEADER.FIELDS]`, 1000 UIDs per FETCH),
   Sent + INBOX scan
 - sender routes, mixed senders, domain defaults
-- `quietbox senders [--folder X] [--mixed]` (database only), `learn-report.csv`
+- `quietbox senders [--folder X] [--mixed]` (database only), the learn report (`<db name>.learn-report.csv`)
 - **Done when:** on your real mailbox the report matches your intuition and the
   runtime is acceptable (measure it; batch FETCH of headers only).
 
@@ -453,7 +454,7 @@ INBOX-only history should count as a learned route is something to decide from `
 - **Docker image and compose: done.** `Dockerfile` (cross-compiling build stage, distroless static nonroot,
   base images pinned by digest, allow-list `.dockerignore`), `deploy/docker-compose.yml` (one service per account,
   non-root, read-only rootfs + `/tmp` tmpfs, all capabilities dropped, no-new-privileges, no ports, password as a
-  compose secret via `password_file`, `working_dir: /data` so `init`'s report lands on the volume),
+  compose secret via `password_file`; `init`'s report is written next to the database, on the volume),
   `deploy/docker-compose.build.yml`, `make docker-build` / `docker-buildx`, `.github/workflows/docker.yml`
   (ghcr.io on `v*` tags and manual runs only) and the guide `docs/DEPLOY.md` (passwords ranked, migrating an
   existing database, backups, NAS notes, troubleshooting).
