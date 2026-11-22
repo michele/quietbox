@@ -19,10 +19,14 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd ./cmd
 COPY internal ./internal
+# What `quietbox --version` reports. Declared late so that changing them only
+# rebuilds the compile step.
+ARG VERSION=dev
+ARG COMMIT=
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w" -o /out/quietbox ./cmd/quietbox
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" -o /out/quietbox ./cmd/quietbox
 
 # gcr.io/distroless/static-debian12:nonroot, multi-arch index digest.
 # Has CA certificates and tzdata, no shell.
@@ -32,8 +36,10 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 # stale by podman/buildah).
 LABEL org.opencontainers.image.title="quietbox" \
       org.opencontainers.image.description="Self-hosted IMAP triage daemon: moves non-urgent mail out of the inbox, learning from how you file it" \
-      org.opencontainers.image.source="https://github.com/michele/quietbox"
+      org.opencontainers.image.source="https://github.com/michele/quietbox" \
+      org.opencontainers.image.licenses="MIT"
 COPY --from=build /out/quietbox /quietbox
+COPY LICENSE /LICENSE
 USER 65532:65532
 ENTRYPOINT ["/quietbox"]
 CMD ["run", "--config", "/config/quietbox.toml"]

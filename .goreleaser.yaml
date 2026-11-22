@@ -1,0 +1,62 @@
+# Release binaries (`make release-snapshot` builds them locally without publishing;
+# .github/workflows/release.yml publishes on a v* tag). Pure Go, no CGO.
+# Windows is not built: the instance locks use flock(2), which is Unix only.
+version: 2
+project_name: quietbox
+
+builds:
+  - id: quietbox
+    main: ./cmd/quietbox
+    binary: quietbox
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Tag }} -X main.commit={{ .FullCommit }} -X main.date={{ slice .CommitDate 0 10 }}
+
+archives:
+  - id: quietbox
+    formats: [tar.gz]
+    name_template: "quietbox_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - deploy/quietbox.example.toml
+      - examples/*
+      - docs/SYSTEMD.md
+      - src: deploy/systemd/quietbox@.service
+        dst: deploy/systemd/quietbox@.service
+      - src: deploy/systemd/quietbox.sysusers
+        dst: deploy/systemd/quietbox.sysusers
+      - src: deploy/systemd/user/quietbox@.service
+        dst: deploy/systemd/user/quietbox@.service
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Everything else
+      order: 2
+  filters:
+    exclude:
+      - '^test'
+      - '^chore'
+      - '^Merge'
+
+# The release is created as a draft: read it, then publish it by hand.
+release:
+  draft: true
+  prerelease: auto

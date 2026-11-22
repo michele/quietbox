@@ -37,7 +37,9 @@ func newRootCmd() *cobra.Command {
 		Short:         "Move non-urgent mail out of your inbox, learning from how you file it",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       versionString(),
 	}
+	root.SetVersionTemplate("quietbox {{.Version}}\n")
 	root.PersistentFlags().StringVar(&opts.configPath, "config", defaultConfigPath(), "path to the TOML config file")
 	root.PersistentFlags().StringVar(&opts.account, "account", "", "use <config folder>/NAME.toml, with its own database (see `quietbox accounts`)")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
@@ -46,7 +48,7 @@ func newRootCmd() *cobra.Command {
 		return nil
 	}
 	root.PersistentFlags().BoolVarP(&opts.verbose, "verbose", "v", false, "print progress to stderr (never credentials)")
-	root.AddCommand(newCheckCmd(opts), newInitCmd(opts), newSendersCmd(opts), newScanCmd(opts), newEvalCmd(opts), newOnceCmd(opts), newRunCmd(opts), newUndoCmd(opts), newAccountsCmd(opts), newExplainCmd(opts))
+	root.AddCommand(newCheckCmd(opts), newInitCmd(opts), newSendersCmd(opts), newScanCmd(opts), newEvalCmd(opts), newOnceCmd(opts), newRunCmd(opts), newUndoCmd(opts), newAccountsCmd(opts), newExplainCmd(opts), newVersionCmd())
 	return root
 }
 

@@ -6,11 +6,14 @@ PLATFORMS ?= linux/amd64,linux/arm64
 # Lazily expanded (?= and =), so only the docker targets shell out to git.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
-DOCKER_BUILD_ARGS = --label org.opencontainers.image.version=$(VERSION) --label org.opencontainers.image.revision=$(REVISION)
+DOCKER_BUILD_ARGS = --label org.opencontainers.image.version=$(VERSION) --label org.opencontainers.image.revision=$(REVISION) \
+	--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(REVISION)
+LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(REVISION)
 COMPOSE_FILE := docker-compose.test.yml
 ITEST_CONFIG := testdata/config/itest.toml
+GORELEASER_VERSION ?= v2.20.3
 
-.PHONY: test lint itest itest-up itest-down seed build docker-build docker-buildx
+.PHONY: test lint itest itest-up itest-down seed build release-snapshot docker-build docker-buildx
 
 test:
 	go test ./... -race
@@ -20,7 +23,11 @@ lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 
 build:
-	CGO_ENABLED=0 go build -trimpath -o bin/quietbox ./cmd/quietbox
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/quietbox ./cmd/quietbox
+
+# All release archives into ./dist, built locally and published nowhere.
+release-snapshot:
+	go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION) release --snapshot --clean
 
 # Container image for this machine's architecture, tagged quietbox:local.
 docker-build:

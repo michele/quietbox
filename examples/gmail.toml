@@ -1,0 +1,78 @@
+# quietbox config for Gmail.   *** UNTESTED: quietbox has only been run against a test server. ***
+# Read docs/PLAN.md ("Not verified") and start with the read-only commands below.
+#
+# What you need:
+#  - IMAP switched on for the account (Gmail settings > Forwarding and POP/IMAP, if the
+#    option is still shown for your account).
+#  - An APP PASSWORD, not your Google password: https://myaccount.google.com/apppasswords
+#    (needs 2-Step Verification; Google Workspace admins can switch app passwords off, and
+#    some account types do not offer them). quietbox does not support OAuth2, so an account
+#    that only allows OAuth cannot use it.
+#
+# The password is NOT stored here (quietbox refuses a `password` key on purpose). Either
+#   export QUIETBOX_IMAP_PASSWORD='the-16-character-app-password'
+# or, for anything long-running, keep it in a file (chmod 600) or a keychain and uncomment ONE:
+#   password_file = "~/.config/quietbox/gmail.pw"
+#   password_command = "pass show mail/gmail"
+#
+# Gmail specifics:
+#  - Labels show up as IMAP folders. Moving a message from INBOX into a folder swaps the
+#    INBOX label for that one; the message stays in "All Mail" either way.
+#  - Gmail's Sent and Trash folders are found through the server's special-use flags
+#    (usually "[Gmail]/Sent Mail" and "[Gmail]/Trash"), whatever language the account uses.
+#    Set `sent_folder` under [learn] only if `quietbox check` says it cannot find Sent.
+#  - Gmail empties Trash by itself after about 30 days.
+#  - A Gmail inbox that no tool has ever sorted has nothing to learn from: see "Starting on
+#    a never-managed account" in the README (`init --fresh --backlog 30d`).
+#
+# Check that the server can do what quietbox needs (MOVE and UIDPLUS are required):
+#   quietbox check --config examples/gmail.toml
+#   quietbox init --fresh --backlog 30d --dry-run --config examples/gmail.toml
+#   quietbox once --dry-run --config examples/gmail.toml        # after init
+#
+# Several accounts: save this as ~/.config/quietbox/gmail.toml and use
+#   export QUIETBOX_IMAP_PASSWORD_GMAIL='...'
+#   quietbox --account gmail check
+
+[imap]
+host = "imap.gmail.com"
+username = "you@gmail.com"     # <- your full address
+# port = 993                   # default; tls = "implicit" is the default too
+
+# Addresses that are "you" (aliases, other domains sent through Gmail). Defaults to the username.
+# [me]
+# addresses = ["you@gmail.com", "you@yourdomain.com"]
+
+# [learn]
+# sent_folder = "[Gmail]/Sent Mail"
+
+# Mail you have already read or flagged stays where it is (both default to true).
+# [run]
+# skip_seen = true
+# skip_flagged = true
+
+# Mail in the blackhole folder moves to Trash after this long (never deleted by quietbox).
+# [blackhole]
+# retention = "30d"            # "off" keeps it for good
+
+# Folders. INBOX (important) and at least one "later" folder are required.
+# Missing ones are created (as labels) by `quietbox init`, only after you confirm.
+[[folder]]
+name = "INBOX"
+type = "important"
+
+[[folder]]
+name = "QuietLater"
+type = "later"
+
+[[folder]]
+name = "QuietNews"
+type = "newsletter"
+
+[[folder]]
+name = "QuietBulk"             # receipts, notifications, order updates
+type = "bulk"
+
+[[folder]]
+name = "QuietBlackHole"        # optional: senders you never want to see again
+type = "blackhole"
