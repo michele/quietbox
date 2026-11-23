@@ -1,4 +1,4 @@
-GOLANGCI_LINT_VERSION ?= v2.5.0
+GOLANGCI_LINT_VERSION ?= v2.15.0
 COMPOSE ?= $(shell command -v docker >/dev/null 2>&1 && echo "docker compose" || echo "podman compose")
 CONTAINER ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
 IMAGE ?= ghcr.io/michele/quietbox:latest
