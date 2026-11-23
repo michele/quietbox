@@ -47,17 +47,17 @@ name = "INBOX"
 type = "important"
 
 [[folder]]
-name = "QuietLater"
+name = "+QuietLater"
 type = "later"
 
 [[folder]]
-name = "QuietNews"
+name = "+QuietNews"
 type = "newsletter"
 
 [[folder]]
-name = "QuietBulk"
+name = "+QuietBulk"
 type = "bulk"
 
 [[folder]]
-name = "QuietBlackHole"      # optional
+name = "+QuietBlackHole"      # optional
 type = "blackhole"

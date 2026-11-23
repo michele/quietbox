@@ -62,17 +62,17 @@ name = "INBOX"
 type = "important"
 
 [[folder]]
-name = "QuietLater"
+name = "+QuietLater"
 type = "later"
 
 [[folder]]
-name = "QuietNews"
+name = "+QuietNews"
 type = "newsletter"
 
 [[folder]]
-name = "QuietBulk"             # receipts, notifications, order updates
+name = "+QuietBulk"             # receipts, notifications, order updates
 type = "bulk"
 
 [[folder]]
-name = "QuietBlackHole"        # optional: senders you never want to see again
+name = "+QuietBlackHole"        # optional: senders you never want to see again
 type = "blackhole"
