@@ -1,15 +1,23 @@
-# quietbox
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+    <img alt="quietbox: a calmer inbox, on a server you own" src="assets/banner-light.svg" width="640">
+  </picture>
+</p>
 
 A self-hosted, open-source alternative to SaneBox. quietbox watches an IMAP mailbox and moves
 non-urgent mail (newsletters, receipts, notifications, blocked senders) out of your inbox into
 folders you choose, **learning from how you file mail yourself**. One static Go binary, run from
 cron or as a daemon, for any IMAP server that supports `MOVE` (developed against Fastmail).
 
-> **Status: v0.1, early.** Reading, learning and measuring (`check`, `init`, `scan`, `eval`) have been
-> run on a real mailbox. **Moving mail** (`once`, `run`, `undo`, training from your moves) has so far
-> only been run against a test IMAP server (Dovecot), not for any length of time on Fastmail, Gmail or
-> another real provider. Start with the dry runs, keep `undo` in mind, and expect rough edges.
-> What is and is not verified is listed per milestone in [docs/PLAN.md](docs/PLAN.md).
+> **Status: v0.1, brand new.** It has not been thoroughly tested. It has been tried on Fastmail and Gmail
+> only; it should work with any IMAP server that supports `MOVE` and `UIDPLUS`, but other providers are
+> unverified. Start with the dry runs, keep `undo` in mind, and expect rough edges. What is and is not
+> verified is listed per milestone in [docs/PLAN.md](docs/PLAN.md).
+>
+> **Use it at your own risk.** quietbox moves mail and never deletes it, and `undo` reverses its moves, but it is
+> released under the [MIT licence](LICENSE) with no warranty. Keep a backup of any mailbox you cannot afford to
+> lose mail from.
 
 - [What it does](#what-it-does) · [Safety](#safety) · [Install](#install) · [Quick start](#quick-start) · [Providers](#providers)
 - [Coming from SaneBox](docs/MIGRATING-FROM-SANEBOX.md) · [Running it: systemd](docs/SYSTEMD.md), [Docker](#running-in-docker)
@@ -42,7 +50,10 @@ Windows (the instance locks need Unix `flock`). One quietbox process runs per ma
 
 ## Install
 
-- **Binary** (Linux and macOS, amd64 and arm64): download the archive from the
+- **Install script** (Linux and macOS, amd64 and arm64): `curl -fsSL https://quietbox.sh/install.sh | sh`
+  installs the latest release into `~/.local/bin` after checking it against `checksums.txt`
+  ([read it first](site/install.sh); `VERSION=` and `INSTALL_DIR=` override the defaults).
+- **Binary** (same platforms): download the archive from the
   [releases page](https://github.com/michele/quietbox/releases), check it against `checksums.txt`
   (`shasum -a 256 -c checksums.txt --ignore-missing`), unpack it and put `quietbox` on your `PATH`. The macOS
   binaries are not signed or notarized, so Gatekeeper will refuse the first run: `xattr -d com.apple.quarantine quietbox`,
