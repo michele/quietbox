@@ -523,9 +523,25 @@ INBOX-only history should count as a learned route is something to decide from `
   table; `examples/` has Fastmail, Gmail (untested) and generic IMAP; `docs/MIGRATING-FROM-SANEBOX.md`. A test parses every example
   config and every complete TOML block in the docs; the quick start was run command by command against the Dovecot server.
   Links and anchors in the docs were checked. Not verified: Gmail, Fastmail for moving mail, a real SaneBox migration.
-- **Remaining:** push, tag `v0.1.0` from a green commit and watch `docker.yml` and `release.yml` run (they have never run on GitHub; CI too),
-  make the GHCR package public (GitHub creates it private) or document `docker login ghcr.io`, read and publish the draft release.
-  Suggested after: `SECURITY.md`, `CONTRIBUTING.md`, a Homebrew tap, the blog post.
+- **Published: done** (2026-11-23). The repository is public; `v0.1.1` is the first published release (`v0.1.0` was
+  deleted). CI, `docker.yml` and `release.yml` have run on GitHub, and the image was built. goreleaser creates each
+  release as a **draft**: publish it with "pre-release" **unchecked**, or GitHub's `/releases/latest` redirect (which
+  `install.sh` uses to find the newest version) does not resolve. (That is what happened with `v0.1.1` at first.)
+- **Site and install script: done** (`site/`, `site/install.sh`, branding in `assets/`). One static page for `quietbox.sh`
+  (inline CSS, no JavaScript) and `curl -fsSL https://quietbox.sh/install.sh | sh`: detects Linux/macOS and amd64/arm64,
+  downloads the release archive, checks it against `checksums.txt` (refuses on a mismatch), installs to `~/.local/bin`
+  (`VERSION=`, `INSTALL_DIR=`). The README carries the banner, a "brand new, tried on Fastmail and Gmail only" status
+  and a use-at-your-own-risk note. `SECURITY.md` (private vulnerability reporting) and `CONTRIBUTING.md` exist.
+  - Verified: the script against a local fake release (good archive installs, wrong checksum installs nothing), and the
+    live script from `quietbox.sh` on macOS arm64 and in a Debian arm64 container (`quietbox --version` printed v0.1.1);
+    the page at desktop and 390 px width (one overflow found and fixed); the served content types.
+  - Not verified: x86_64 Linux, Intel macOS, `shellcheck`, the page in dark mode in a real browser, that private
+    vulnerability reporting is switched on, that the GHCR package is public.
+- **Real providers: reported working, not checked item by item.** quietbox runs against a Fastmail and a Gmail account
+  (one daemon each). Still individually unconfirmed from the earlier "not verified" lists: INTERNALDATE preserved on
+  MOVE (return-to-INBOX detection), Gmail advertising both `MOVE` and `UIDPLUS`, Trash special-use for blackhole
+  retention (first purges are 30 days out), and M3's own "done" criterion (SaneBox off, a week of clean running).
+- **Suggested next:** a Homebrew tap, the blog post, and the open questions below.
 
 ## Ideas (not planned)
 
