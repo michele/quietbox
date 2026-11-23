@@ -56,7 +56,28 @@ changelog:
       - '^chore'
       - '^Merge'
 
+# Homebrew formula, pushed to michele/homebrew-quietbox by the release workflow.
+# The release itself is a draft until you publish it, so `brew install` fails
+# (404 on the archives) between the tag and the publish; publish promptly.
+# Needs HOMEBREW_TAP_GITHUB_TOKEN (see docs/RELEASING.md).
+brews:
+  - name: quietbox
+    repository:
+      owner: michele
+      name: homebrew-quietbox
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    url_template: "https://github.com/michele/quietbox/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    homepage: https://quietbox.sh
+    description: "Self-hosted inbox triage for any IMAP mailbox"
+    license: MIT
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/quietbox --version")
+    commit_msg_template: "quietbox {{ .Tag }}"
+
 # The release is created as a draft: read it, then publish it by hand.
 release:
+  github:
+    owner: michele
+    name: quietbox
   draft: true
   prerelease: auto
