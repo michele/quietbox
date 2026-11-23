@@ -541,7 +541,12 @@ INBOX-only history should count as a learned route is something to decide from `
   (one daemon each). Still individually unconfirmed from the earlier "not verified" lists: INTERNALDATE preserved on
   MOVE (return-to-INBOX detection), Gmail advertising both `MOVE` and `UIDPLUS`, Trash special-use for blackhole
   retention (first purges are 30 days out), and M3's own "done" criterion (SaneBox off, a week of clean running).
-- **Suggested next:** a Homebrew tap, the blog post, and the open questions below.
+- **Homebrew tap: set up, not yet exercised.** `michele/homebrew-quietbox` exists and `.goreleaser.yaml` has a `brews`
+  section that pushes the formula at release time (token and steps in `docs/RELEASING.md`). Nothing has run it yet: the
+  tap stays empty until the next tagged release, and `brew install` is not in the README or the site until then. goreleaser
+  deprecates `brews` (so `goreleaser check` exits non-zero), but a formula is kept on purpose: casks are macOS only, and a
+  cask download is quarantined, which the unsigned macOS binaries would trip over. Revisit when goreleaser removes it.
+- **Suggested next:** the first release through the tap (then the `brew install` line), the blog post, and the open question below.
 
 ## Ideas (not planned)
 
@@ -553,5 +558,9 @@ INBOX-only history should count as a learned route is something to decide from `
 
 ## Open questions
 
-- Should `init` read Fastmail contacts (CardDAV) as an allowlist, or just a vCard file?
 - Inbox lookback default: is 6 months right for your mailbox?
+
+## Decided against
+
+- Reading contacts (CardDAV, or a vCard file) as an allowlist: decided against. The owner does not want contact data
+  from the mail provider pulled in; Sent mail and your own filing are the signals.
