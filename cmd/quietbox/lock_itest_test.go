@@ -291,15 +291,28 @@ func TestLockStress(t *testing.T) {
 	for err := range errs {
 		t.Error(err)
 	}
+	// The pass lock is polled, not fair: while the set/unset loop retakes it in
+	// a tight loop, how many passes the daemon wins in 5 s is luck, and on a
+	// slow or single-CPU machine it can be none (the documented limitation, see
+	// docs/PLAN.md, M4.1). So the number of passes during the stress is only
+	// reported. What must hold is liveness: once the contention stops, the
+	// daemon (nothing else is running yet) files new mail by itself.
+	duringStress := passCount(out)
+	const sentinel = "<stress-sentinel@t>"
+	e.deliver("INBOX", "writer@news.test", sentinel)
+	if !waitFor(t, 30*time.Second, func() bool { return e.has("SaneNews", sentinel) }) {
+		t.Fatalf("the daemon did not file mail delivered after the stress\n%s", out.String())
+	}
+	if !waitFor(t, 10*time.Second, func() bool { return passCount(out) > 1 }) {
+		t.Errorf("the daemon filed the sentinel but reported no pass beyond its first\n%s", out.String())
+	}
 	// Settle: a last once files whatever the daemon has not reached yet.
 	if o, err := e.runCtx(30*time.Second, "once"); err != nil {
 		t.Fatalf("final once: %v\n%s", err, o)
 	}
 	stop()
-	t.Logf("%d deliveries, %d once runs, %d senders set/unset, %d run passes", len(ids), onces, sets, passCount(out))
-	if passCount(out) <= 1 {
-		t.Errorf("the daemon made %d pass(es): it did no work beside the first", passCount(out))
-	}
+	t.Logf("%d deliveries, %d once runs, %d senders set/unset, %d run passes during the stress, %d in all",
+		len(ids), onces, sets, duringStress, passCount(out))
 	// No write was lost: flip@'s route is what the last set/unset left.
 	if folder, source := e.route("flip@nowhere.test"); lastRoute == "" && source == "trained" || lastRoute != "" && (folder != lastRoute || source != "trained") {
 		t.Errorf("flip@ route is %q (%s), the last set/unset left %q", folder, source, lastRoute)

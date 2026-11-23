@@ -437,7 +437,7 @@ INBOX-only history should count as a learned route is something to decide from `
   exactly one folder, no key moved twice, no `planned` row; the real `run` in a child process killed with SIGKILL
   while idle and while waiting for the pass lock, after which `once` and a new `run` start at once) and a manual demo.
   Final wave: unit tests for the repeated "still waiting" notice (and once-only for the other commands) and the last
-  attempt at the timeout; the stress test also checks the daemon made more than one pass, that flip@'s mail was
+  attempt at the timeout; the stress test also checks that the daemon files mail delivered after the contention stops (the passes it wins *during* the stress are only reported: the lock is not fair, and on a slow or single-CPU machine it can win none), that flip@'s mail was
   filed only by its hand-set route (or stayed in INBOX with no move row) and that the last `set`/`unset` is the
   stored route.
 - **Not verified:**
