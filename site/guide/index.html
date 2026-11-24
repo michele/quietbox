@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started with quietbox</title>
+<meta name="description" content="Install quietbox, connect it to your mailbox, check what it learned, and let it run, step by step.">
+<meta property="og:title" content="Getting started with quietbox">
+<meta property="og:description" content="From install to a quieter inbox, step by step.">
+<meta property="og:image" content="https://quietbox.sh/og.png">
+<meta property="og:url" content="https://quietbox.sh/guide/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/favicon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700&family=JetBrains+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero" style="padding-bottom:2rem">
+    <div class="wordmark"><a href="/">quietbox</a></div>
+    <h1>Getting started</h1>
+    <p class="lede">From install to a quieter inbox. quietbox moves no mail until step 7, so you can stop at any point before that and your inbox is untouched.</p>
+  </header>
+
+  <nav class="toc" aria-label="Steps">
+    <ol>
+      <li><a href="#before">Before you start</a></li>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#config">Write a config</a></li>
+      <li><a href="#check">Check the connection</a></li>
+      <li><a href="#learn">Learn from your mailbox</a></li>
+      <li><a href="#review">See what it would do</a></li>
+      <li><a href="#file">File mail for real</a></li>
+      <li><a href="#running">Keep it running</a></li>
+      <li><a href="#training">Teach it by moving mail</a></li>
+      <li><a href="#undo">Change your mind</a></li>
+      <li><a href="#trouble">When something is off</a></li>
+    </ol>
+  </nav>
+
+  <section id="before">
+    <h2>1. Before you start</h2>
+    <p>You need a mailbox on Fastmail, Gmail, or another IMAP server that supports <code>MOVE</code> and <code>UIDPLUS</code>. Microsoft 365 and Outlook.com are not supported, because they only allow IMAP through OAuth2.</p>
+    <p>You also need an <strong>app password</strong>: a separate password your provider creates for one application, so quietbox never sees your real one.</p>
+    <ul class="plain">
+      <li><strong>Fastmail:</strong> Settings, Privacy &amp; Security, Integrations, New app password, access "Mail (IMAP)".</li>
+      <li><strong>Gmail:</strong> <a href="https://myaccount.google.com/apppasswords">myaccount.google.com/apppasswords</a>. It needs 2-Step Verification, and Google Workspace admins can switch app passwords off.</li>
+    </ul>
+    <div class="note"><p>quietbox is new and has not been thoroughly tested. It never deletes mail and <code>undo</code> reverses its moves, but keep a backup of anything you cannot afford to lose, and use the dry runs below.</p></div>
+  </section>
+
+  <section id="install">
+    <h2>2. Install</h2>
+<pre><code>curl -fsSL https://quietbox.sh/install.sh | sh
+quietbox --version</code></pre>
+    <p style="margin-top:1rem" class="muted">This puts <code>quietbox</code> in <code>~/.local/bin</code>, so make sure that is on your <code>PATH</code>. For other ways to install (archives, <code>go install</code>, a container), see <a href="/#install">the install section</a>.</p>
+  </section>
+
+  <section id="config">
+    <h2>3. Write a config</h2>
+    <p>quietbox reads one TOML file, by default <code>~/.config/quietbox/config.toml</code>. Start from the example for your provider, in <a href="https://github.com/michele/quietbox/tree/main/examples"><code>examples/</code></a> on GitHub (Fastmail, Gmail, or generic IMAP). A minimal one looks like this:</p>
+<pre data-lang="toml"><code>[imap]
+host = "imap.fastmail.com"       # Gmail: imap.gmail.com
+username = "you@example.com"
+
+[[folder]]
+name = "INBOX"
+type = "important"
+
+[[folder]]
+name = "+QuietLater"
+type = "later"
+
+[[folder]]
+name = "+QuietNews"
+type = "newsletter"
+
+[[folder]]
+name = "+QuietBulk"
+type = "bulk"
+
+[[folder]]
+name = "+QuietBlackHole"
+type = "blackhole"</code></pre>
+    <p style="margin-top:1rem">The folder names are yours to choose. The <code>+</code> in front just makes them sort together. If you already have folders you file mail into, name them here with the type that fits, and quietbox learns from them in step 5.</p>
+    <p>The password never goes in the file. For now, put it in the environment:</p>
+<pre><code>export QUIETBOX_IMAP_PASSWORD='your-app-password'</code></pre>
+    <p style="margin-top:1rem" class="muted">For anything that runs unattended, use a <code>password_file</code> or <code>password_command</code> instead (see <a href="#running">step 8</a>).</p>
+    <div class="note"><p>Coming from SaneBox? Keep its folder names (<code>SaneLater</code>, <code>SaneNews</code> and so on) instead, so quietbox can learn from what SaneBox already filed. <a href="https://github.com/michele/quietbox/blob/main/docs/MIGRATING-FROM-SANEBOX.md">The migration guide</a> walks through it.</p></div>
+  </section>
+
+  <section id="check">
+    <h2>4. Check the connection</h2>
+<pre><code>quietbox check</code></pre>
+    <p style="margin-top:1rem"><code>check</code> connects, prints what the server supports, and shows which of your folders exist. It needs <code>MOVE</code> and <code>UIDPLUS</code>, and quietbox refuses to run without them. It changes nothing.</p>
+  </section>
+
+  <section id="learn">
+    <h2>5. Learn from your mailbox</h2>
+<pre><code><span class="c"># read-only: shows what it would learn</span>
+quietbox init --dry-run
+
+<span class="c"># creates missing folders (it asks first) and learns</span>
+quietbox init</code></pre>
+    <p style="margin-top:1rem"><code>init</code> reads message headers only, never bodies, and marks nothing as read. It looks at your folders, your Sent mail, and the last six months of INBOX, and works out which sender belongs where. It writes a CSV report next to its database, one row per sender with the route it chose and why. Open it before going on.</p>
+    <div class="note"><p><strong>If nothing has ever sorted this mailbox</strong>, everything is sitting in INBOX and there is nothing to learn from. Use <code>quietbox init --fresh --backlog 30d</code> instead, and read <a href="https://github.com/michele/quietbox#starting-on-a-never-managed-account">Starting on a never-managed account</a> first.</p></div>
+  </section>
+
+  <section id="review">
+    <h2>6. See what it would do</h2>
+<pre><code><span class="c"># what would happen to your inbox right now, and why</span>
+quietbox scan
+
+<span class="c"># how well it would have done on mail you already sorted</span>
+quietbox eval
+
+<span class="c"># what it would file on the next pass</span>
+quietbox once --dry-run</code></pre>
+    <p style="margin-top:1rem">All three only read. Look for mail in the list that should have stayed in your inbox. In <code>eval</code>, the number to watch is <strong>hidden important</strong>: inbox mail quietbox would have filed away. If something looks wrong, <code>quietbox explain</code> says why a given message was filed where it was, and <code>quietbox senders set sender@example.com INBOX</code> pins a sender to your inbox.</p>
+  </section>
+
+  <section id="file">
+    <h2>7. File mail for real</h2>
+<pre><code>quietbox once</code></pre>
+    <p style="margin-top:1rem">This files the mail that has arrived since <code>init</code>. Your existing inbox is never swept. Mail you have already read or flagged stays where it is, and so does anything it cannot place. Every move is written to the audit log before it happens.</p>
+  </section>
+
+  <section id="running">
+    <h2>8. Keep it running</h2>
+    <p>You have two choices. Run <code>quietbox once</code> from cron every few minutes, or run <code>quietbox run</code> as a daemon that waits on your inbox and files mail as it arrives.</p>
+    <p>Either way, an unattended process should not read the password from your shell. Put it in a file only you can read (<code>chmod 600</code>), or fetch it from a keychain or password manager:</p>
+<pre data-lang="toml"><code>[imap]
+host = "imap.fastmail.com"
+username = "you@example.com"
+password_file = "~/.config/quietbox/fastmail.pw"
+# or: password_command = "security find-generic-password -s quietbox -w"
+
+[[folder]]
+name = "INBOX"
+type = "important"
+
+[[folder]]
+name = "+QuietLater"
+type = "later"</code></pre>
+    <p style="margin-top:1rem">To start the daemon at boot, use the <a href="https://github.com/michele/quietbox/blob/main/docs/SYSTEMD.md">systemd units</a> or the <a href="https://github.com/michele/quietbox/blob/main/docs/DEPLOY.md">container image</a>. Restart <code>run</code> after you edit the config.</p>
+    <p>For a second mailbox, save its config as <code>~/.config/quietbox/NAME.toml</code> and add <code>--account NAME</code> to each command. Each account gets its own process and database.</p>
+  </section>
+
+  <section id="training">
+    <h2>9. Teach it by moving mail</h2>
+    <p>From any mail app, move a message into one of your quietbox folders and that sender's mail goes there from now on. Move a message back to INBOX and that sender stays in your inbox. One move is enough, your latest move wins, and it beats anything quietbox learned or detected. Training changes quietbox's own database, never your mailbox.</p>
+    <p>To block a sender, move one of their messages into the blackhole folder. Nothing is deleted at that point. After 30 days, quietbox moves the mail to Trash.</p>
+  </section>
+
+  <section id="undo">
+    <h2>10. Change your mind</h2>
+<pre><code>quietbox undo --since 1h</code></pre>
+    <p style="margin-top:1rem"><code>undo</code> moves back what quietbox filed in that time. It leaves alone anything you moved yourself since, and it will not file those messages again.</p>
+  </section>
+
+  <section id="trouble">
+    <h2>When something is off</h2>
+    <ul class="plain">
+      <li><strong>Login fails:</strong> use the app password, not your account password. On Gmail, check that IMAP is switched on.</li>
+      <li><strong><code>check</code> says <code>MOVE</code> or <code>UIDPLUS</code> is missing:</strong> your server cannot be used safely, and quietbox will not try.</li>
+      <li><strong>"another quietbox is still running":</strong> only one quietbox acts on a mailbox at a time. Wait for the other one, or see <a href="https://github.com/michele/quietbox#locks">Locks</a>.</li>
+      <li><strong>A message was filed wrongly:</strong> move it back, or run <code>quietbox explain</code> on it.</li>
+      <li><strong>Mail it should have filed is still in your inbox:</strong> expected now and then. quietbox leaves mail alone when it is unsure. Move it to the right folder once and the sender is learned.</li>
+    </ul>
+    <p class="next"><a href="https://github.com/michele/quietbox#usage">Full reference on GitHub &rarr;</a></p>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <a href="/">Home</a>
+    <a href="https://github.com/michele/quietbox">GitHub</a>
+    <a href="https://github.com/michele/quietbox/releases">Releases</a>
+    <span>MIT licence</span>
+    <span>Made by <a href="https://finotto.org">Michele Finotto</a></span>
+  </div>
+</footer>
+</body>
+</html>
