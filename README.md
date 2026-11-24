@@ -10,8 +10,8 @@ non-urgent mail (newsletters, receipts, notifications, blocked senders) out of y
 folders you choose, **learning from how you file mail yourself**. One static Go binary, run from
 cron or as a daemon, for any IMAP server that supports `MOVE` (developed against Fastmail).
 
-> **Status: v0.1, brand new.** It has not been thoroughly tested. It has been tried on Fastmail and Gmail
-> only; it should work with any IMAP server that supports `MOVE` and `UIDPLUS`, but other providers are
+> **Status: new, and not thoroughly tested.** It is in daily use on Fastmail and Gmail accounts and has not
+> been tried on other providers; it should work with any IMAP server that supports `MOVE` and `UIDPLUS`, but other providers are
 > unverified. Start with the dry runs, keep `undo` in mind, and expect rough edges. What is and is not
 > verified is listed per milestone in [docs/PLAN.md](docs/PLAN.md).
 >
@@ -19,6 +19,7 @@ cron or as a daemon, for any IMAP server that supports `MOVE` (developed against
 > released under the [MIT licence](LICENSE) with no warranty. Keep a backup of any mailbox you cannot afford to
 > lose mail from.
 
+- New here? The [getting started guide](https://quietbox.sh/guide/) walks through it step by step.
 - [What it does](#what-it-does) · [Safety](#safety) · [Install](#install) · [Quick start](#quick-start) · [Providers](#providers)
 - [Coming from SaneBox](docs/MIGRATING-FROM-SANEBOX.md) · [Running it: systemd](docs/SYSTEMD.md), [Docker](#running-in-docker)
 - Reference: [Configuration](#configuration) · [Usage](#usage) · [Locks](#locks) · [Training](#training-move-mail-by-hand) · [Passwords](#password-sources) · [Several accounts](#several-accounts)
@@ -89,7 +90,7 @@ have done on mail you have already sorted. If your mailbox has never been sorted
 | Provider | Status | Config |
 |---|---|---|
 | Fastmail | what it was developed against; app password | [`examples/fastmail.toml`](examples/fastmail.toml) |
-| Gmail | **untested**; IMAP with an [app password](https://myaccount.google.com/apppasswords) (needs 2-Step Verification) | [`examples/gmail.toml`](examples/gmail.toml) |
+| Gmail | in daily use, not thoroughly tested; IMAP with an [app password](https://myaccount.google.com/apppasswords) (needs 2-Step Verification) | [`examples/gmail.toml`](examples/gmail.toml) |
 | Any IMAP server with `MOVE` and `UIDPLUS` | tested against Dovecot 2.4.5 only; `quietbox check` shows what your server offers | [`examples/generic-imap.toml`](examples/generic-imap.toml) |
 | Microsoft 365, Outlook.com | **not supported**: IMAP needs OAuth2, which quietbox does not implement | |
 
