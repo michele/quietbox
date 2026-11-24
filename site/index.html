@@ -16,76 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700&family=JetBrains+Mono:wght@400&display=swap">
-<style>
-  :root {
-    --bg: #F4EDE2;
-    --text: #2B211B;
-    --muted: #6B5A4C;
-    --accent: #C2643F;
-    --accent-text: #9E4A2C;
-    --line: #E2D3BE;
-    --code-bg: #EBE0CF;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #1F1915;
-      --text: #F4EDE2;
-      --muted: #BBA996;
-      --accent: #E07F57;
-      --accent-text: #E07F57;
-      --line: #3A2D24;
-      --code-bg: #28201A;
-    }
-  }
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 500 1.0625rem/1.65 "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  .wrap { max-width: 44rem; margin: 0 auto; padding: 0 1rem; }
-  a { color: var(--accent-text); text-underline-offset: 0.18em; }
-  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
-  h1, h2 { font-weight: 700; letter-spacing: -0.03em; line-height: 1.2; margin: 0; }
-  h2 { font-size: 1.375rem; margin-bottom: 0.75rem; }
-  p { margin: 0 0 1rem; }
-  section { padding: 2.75rem 0; border-top: 1px solid var(--line); }
-  .muted { color: var(--muted); }
-
-  header.hero { padding: 4rem 0 3.25rem; }
-  .mark { width: 4.5rem; height: 4.5rem; display: block; margin-bottom: 1.5rem; }
-  .wordmark { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.04em; margin-bottom: 1.25rem; }
-  h1 { font-size: clamp(2rem, 6vw, 2.875rem); margin-bottom: 1rem; }
-  .lede { font-size: 1.1875rem; color: var(--muted); max-width: 34rem; margin-bottom: 1.75rem; }
-  .links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; font-weight: 700; }
-
-  ol.steps { margin: 0; padding-left: 1.4rem; }
-  ol.steps li { margin-bottom: 0.75rem; padding-left: 0.25rem; }
-  ol.steps li::marker { color: var(--muted); font-weight: 700; }
-  code, pre { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.875rem; }
-  code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
-  pre {
-    background: var(--code-bg);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-    margin: 1rem 0 0;
-    overflow-x: auto;
-    line-height: 1.7;
-    tab-size: 2;
-  }
-  pre code { background: none; padding: 0; font-size: inherit; }
-  .c { color: var(--muted); }
-
-  ul.plain { margin: 0; padding: 0; list-style: none; }
-  ul.plain li { padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
-  ul.plain li:last-child { border-bottom: 0; }
-
-  footer { border-top: 1px solid var(--line); padding: 2rem 0 3rem; color: var(--muted); font-size: 0.9375rem; }
-  footer .wrap { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
-</style>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div class="wrap">
@@ -99,15 +30,16 @@
     <h1>A calmer inbox, on a server you own.</h1>
     <p class="lede">Self-hosted inbox triage for any IMAP mailbox. quietbox moves newsletters, receipts and notifications out of your inbox, and learns from how you file mail yourself.</p>
     <div class="links">
-      <a href="https://github.com/michele/quietbox">GitHub</a>
+      <a href="/guide/">Getting started</a>
       <a href="#install">Install</a>
+      <a href="https://github.com/michele/quietbox">GitHub</a>
       <a href="https://github.com/michele/quietbox/blob/main/docs/MIGRATING-FROM-SANEBOX.md">Coming from SaneBox</a>
     </div>
   </header>
 
   <section id="how">
     <h2>How it works</h2>
-    <p>You give quietbox a few folders, each with a type: <code>important</code> (your INBOX), <code>later</code>, <code>newsletter</code>, <code>bulk</code>, and optionally <code>blackhole</code>.</p>
+    <p>You give quietbox a few folders, each with a type: <code>important</code> (your INBOX), <code>later</code>, <code>newsletter</code>, <code>bulk</code> (receipts, notifications), and optionally <code>blackhole</code> (senders you never want to see). They are ordinary folders on your mail server, so any mail app shows them.</p>
     <ol class="steps">
       <li><code>quietbox init</code> reads your folders and Sent mail and learns where each sender belongs.</li>
       <li><code>quietbox once</code> (from cron) or <code>quietbox run</code> (a daemon) files new mail as it arrives, using what it learned and detectors for newsletters and automated mail.</li>
@@ -120,16 +52,37 @@ quietbox once --dry-run
 
 <span class="c"># and take it back if you change your mind</span>
 quietbox undo --since 1h</code></pre>
+    <p class="next"><a href="/guide/">Follow the getting started guide &rarr;</a></p>
   </section>
 
   <section id="safety">
     <h2>Quiet, and careful</h2>
     <ul class="plain">
-      <li>Mail it cannot place stays in your inbox. Hiding a real person's email is the failure it tries hardest to avoid.</li>
+      <li>Mail it cannot place stays in your inbox. Hiding a real person's email is the failure it tries hardest to avoid, so when it errs, it errs toward leaving a newsletter in your inbox, not hiding something you needed.</li>
       <li>It never expunges or permanently deletes. "Delete" means move to Trash.</li>
       <li>Every move is written to an audit log before it runs, and <code>undo</code> can reverse any of them.</li>
       <li>It reads headers only, and never logs message bodies or credentials.</li>
     </ul>
+  </section>
+
+  <section id="trust">
+    <h2>Check it before you trust it</h2>
+    <p>Three read-only commands let you see its judgement on your own mail before it moves anything:</p>
+    <ul class="plain">
+      <li><code>quietbox scan</code> shows what it would do with your inbox right now, and why.</li>
+      <li><code>quietbox eval</code> measures how well it would have done on mail you have already sorted.</li>
+      <li><code>quietbox explain</code> says why it filed one particular message where it did.</li>
+    </ul>
+  </section>
+
+  <section id="providers">
+    <h2>Works with</h2>
+    <dl class="providers">
+      <div><dt>Fastmail and Gmail</dt><dd>In daily use, with an app password.</dd></div>
+      <div><dt>Any IMAP server with MOVE and UIDPLUS</dt><dd>Should work, but unverified beyond a Dovecot test server. <code>quietbox check</code> shows what your server offers.</dd></div>
+      <div><dt>Microsoft 365 and Outlook.com</dt><dd>Not supported. They require OAuth2 for IMAP, which quietbox does not implement.</dd></div>
+    </dl>
+    <p class="muted" style="margin:1rem 0 0">Not included: a web interface, snooze and reply reminders, digests. It runs on Linux and macOS, not Windows. One quietbox process runs per mailbox, so several accounts means several processes.</p>
   </section>
 
   <section id="install">
@@ -137,11 +90,12 @@ quietbox undo --since 1h</code></pre>
     <p>One static binary for Linux and macOS, on amd64 and arm64. The script checks the download against the published checksums before it installs anything, and puts <code>quietbox</code> in <code>~/.local/bin</code>.</p>
 <pre><code>curl -fsSL https://quietbox.sh/install.sh | sh</code></pre>
     <p style="margin-top:1rem" class="muted">Prefer to read it first? <a href="install.sh">install.sh</a> is short. You can also take an archive from the <a href="https://github.com/michele/quietbox/releases">releases page</a>, or run <code>go install github.com/michele/quietbox/cmd/quietbox@latest</code>. The macOS binaries are not signed, so Gatekeeper refuses the first run: <code>xattr -d com.apple.quarantine quietbox</code>. To keep it running, use the <a href="https://github.com/michele/quietbox/blob/main/docs/SYSTEMD.md">systemd units</a> or the <a href="https://github.com/michele/quietbox#running-in-docker">container image</a>.</p>
+    <p class="next"><a href="/guide/">Then set it up: getting started &rarr;</a></p>
   </section>
 
   <section id="status">
     <h2>Status</h2>
-    <p>Version 0.1, and brand new, so it has not been thoroughly tested. It has been tried on Fastmail and Gmail only. It should work with any IMAP server that supports <code>MOVE</code> and <code>UIDPLUS</code>, but other providers are unverified.</p>
+    <p>quietbox is a new project and has not been thoroughly tested. It is in daily use on Fastmail and Gmail accounts. It should work with any IMAP server that supports <code>MOVE</code> and <code>UIDPLUS</code>, but other providers are unverified.</p>
     <p>Use it at your own risk. quietbox moves mail and never deletes it, and <code>undo</code> reverses its moves, but it is released under the MIT licence with no warranty. Start with the dry runs, and keep a backup of any mailbox you cannot afford to lose mail from.</p>
     <p class="muted" style="margin-bottom:0">What is and is not verified is listed milestone by milestone in <a href="https://github.com/michele/quietbox/blob/main/docs/PLAN.md">the plan</a>.</p>
   </section>
@@ -150,9 +104,11 @@ quietbox undo --since 1h</code></pre>
 
 <footer>
   <div class="wrap">
+    <a href="/guide/">Guide</a>
     <a href="https://github.com/michele/quietbox">GitHub</a>
     <a href="https://github.com/michele/quietbox/releases">Releases</a>
     <span>MIT licence</span>
+    <span>Made by <a href="https://finotto.org">Michele Finotto</a></span>
   </div>
 </footer>
 </body>

@@ -546,6 +546,12 @@ INBOX-only history should count as a learned route is something to decide from `
   tap stays empty until the next tagged release, and `brew install` is not in the README or the site until then. goreleaser
   deprecates `brews` (so `goreleaser check` exits non-zero), but a formula is kept on purpose: casks are macOS only, and a
   cask download is quarantined, which the unsigned macOS binaries would trip over. Revisit when goreleaser removes it.
+- **Site: status refresh, getting started guide (2026-11-24).** After a day of use on Fastmail and Gmail, the status text on the
+  site and README says "new, not thoroughly tested" with no version number (so it does not need updating per release), and Gmail
+  is no longer marked untested. `site/index.html` now says which providers work (and that Microsoft 365 and Outlook.com do not),
+  what is not included, and how to check it before trusting it (`scan`, `eval`, `explain`). `site/guide/index.html` is a
+  step-by-step guide from install to `undo`; the CSS moved to `site/style.css`. The footer credits the author. The configs in
+  the guide are parsed by `TestSiteTOMLBlocksParse`, like the docs.
 - **Suggested next:** the first release through the tap (then the `brew install` line), the blog post, and the open question below.
 
 ## Ideas (not planned)
