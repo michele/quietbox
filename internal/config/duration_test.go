@@ -27,3 +27,14 @@ func TestParseDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDurationRejectsOverflow(t *testing.T) {
+	for _, in := range []string{"300y", "2147483647h", "2147483647y"} {
+		if d, err := ParseDuration(in); err == nil {
+			t.Errorf("ParseDuration(%q) = %v, want an error (it overflows time.Duration)", in, d)
+		}
+	}
+	if d, err := ParseDuration("100y"); err != nil || d <= 0 {
+		t.Errorf("ParseDuration(100y) = %v, %v, want a positive duration", d, err)
+	}
+}

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -227,5 +228,37 @@ func TestDeleteCursor(t *testing.T) {
 	}
 	if _, ok, err := s.Cursor(ctx, "SaneNews"); err != nil || ok {
 		t.Errorf("cursor still there: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestTrainingSince(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	err := s.Update(ctx, func(tx *Tx) error {
+		for _, r := range []TrainingRow{
+			{At: at(1), Sender: "a@x.com", Folder: "F1", Source: TrainMove, MessageKey: "k1"},
+			{At: at(5), Sender: "b@x.com", Folder: "F2", Source: TrainMove, MessageKey: "k2"},
+			{At: at(9), Sender: "c@x.com", Folder: "F3", Source: TrainManual},
+		} {
+			if err := tx.AddTraining(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.TrainingSince(ctx, at(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Sender != "b@x.com" || got[0].Folder != "F2" || got[0].Source != TrainMove || got[0].MessageKey != "k2" ||
+		got[1].Sender != "c@x.com" || got[1].Source != TrainManual {
+		t.Fatalf("got %+v, want the events at day 5 and day 9, oldest first", got)
+	}
+	none, err := s.TrainingSince(ctx, at(20))
+	if err != nil || len(none) != 0 {
+		t.Fatalf("later cutoff: %v, %+v", err, none)
 	}
 }

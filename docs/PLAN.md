@@ -554,6 +554,34 @@ INBOX-only history should count as a learned route is something to decide from `
   the guide are parsed by `TestSiteTOMLBlocksParse`, like the docs.
 - **Suggested next:** the first release through the tap (then the `brew install` line), the blog post, and the open question below.
 
+### M7: Stats: implemented
+- Design: `docs/superpowers/specs/2026-11-26-stats-design.md`; plan: `docs/superpowers/plans/2026-11-26-stats.md`.
+- `quietbox stats [--since DUR] [--json]` (default `30d`). Reads the database only: no IMAP login, no lock, nothing written.
+  No schema change: it queries `audit` (via `AuditSince`) and `training` (`Store.TrainingSince`).
+- **Filed** = `move` audit rows with status `done` in the window, except retention purges (rule `retention`), which are shown as
+  "purged to Trash" on the folder they left. A move that was later undone (`audit.undone`) is **not** filed: it counts only under
+  "Undone with undo", so reversed batches do not inflate the time saved.
+- **Rule** = the text before the first `": "` of `audit.reason` (`other` when there is none). The reason does not say whether a
+  `sender` route was learned or trained, so the breakdown is by rule, not by route source.
+- **Correction** = a `training` event (`source = move`) for a message quietbox filed (not undone), dated at or after the move; one per
+  message, the latest event decides "dragged back to INBOX" or "re-filed elsewhere". `senders set` events are not corrections but are
+  counted in "senders retrained". `undo` is counted separately (`audit.undone`) and creates no training row.
+  **Undercount:** a training row is only written when it changes the sender's trained route (`applyTraining`, `recordTraining`), so
+  once one message from a sender is dragged back, more drags of that sender's mail leave no row: five drags show as 1 correction.
+  Counting them would need return detection in the engine, not in `stats`.
+- **Error rate** = corrections / filed. It is a floor: it only sees mistakes you noticed and fixed (and only the first move per
+  retrained sender); `eval` measures the hidden ones.
+- Final review (fresh reviewer): undone moves excluded from filed, `--since` overflow rejected in `config.ParseDuration`, the undercount
+  documented. Deferred minors: the window label shows "0 days" under a day; JSON `error_rate` is 0 (not null) and empty lists are
+  `null`; putting a message back into the folder quietbox filed it to reads as "re-filed elsewhere"; "Senders retrained" sits under
+  "Mistakes" but counts any retraining; undone retention purges count in "Undone with undo"; `Compute` relies on newest-first input
+  for duplicate keys.
+- **Time saved** = filed x `[stats] seconds_per_message` (default 5, positive integer), always labelled an estimate.
+- Code: `internal/stats` (pure `Compute`, `WriteText`, `FormatSaved`, table-tested), `cmd/quietbox/stats.go`.
+- Verified: unit tests under `-race`; `make itest` (a throwaway Dovecot user: filing, a drag back, `undo`, `--json`) and a manual run.
+- **Not verified:** numbers on a real mailbox; performance on a very large audit log (the window's moves are read in one query, there
+  is no index on `audit.at`: measure before adding one); that 5 s per message is a fair default.
+
 ## Ideas (not planned)
 
 - Snooze folders, reply reminders via plus addressing

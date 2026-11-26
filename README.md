@@ -168,6 +168,9 @@ skip_flagged = true               # leave flagged mail where it is
 retention = "30d"                 # move mail out of the blackhole folder to Trash after this long; "off" to keep it
 trash_folder = ""                 # default: the folder the server marks \Trash
 
+[stats]
+seconds_per_message = 5           # `quietbox stats` estimates time saved as filed messages x this
+
 [state]
 path = ""                         # default: $XDG_STATE_HOME/quietbox/quietbox.db
 ```
@@ -417,6 +420,50 @@ quietbox explain --folder +QuietNews 1234         # or by UID in a folder (defau
 the reason and detector signals, the sender's route and where it came from (learned or trained), the
 latest training event, and the audit log rows for that message. It opens the folder read-only, takes
 no lock and writes nothing. It prints the sender address, UID and Message-ID, never the subject or body.
+
+### How much is it doing? `stats`
+
+```sh
+quietbox stats                # the last 30 days
+quietbox stats --since 7d     # or 90d, 6mo, ...
+quietbox stats --json         # for scripts
+```
+
+```
+Last 30 days (account: you@example.com)
+Filed away  412 messages   est. time saved ~34 min (5 s each)
+
+Where it went
+  +QuietNews  201  49%  sender 140 · newsletter 61
+  +QuietBulk  138  34%  sender 90 · bulk 48
+  +QuietLater  61  15%  later 61
+  +QuietBlackHole  12  3%  sender 12 · purged to Trash 4
+
+Mistakes
+  Corrected by you   9  2.2%   (dragged back to INBOX 6, re-filed elsewhere 3)
+  Undone with undo   0
+  Senders retrained  7
+  The error rate is a floor: it counts only mistakes you fixed, and only the first move per retrained sender; mail wrongly hidden that you never noticed is not in it.
+```
+
+- **Filed away** is the number of messages quietbox moved out of INBOX in the window (moves that succeeded).
+  Moves you reversed with `undo` are not counted as filed or as time saved; they appear under "Undone with undo".
+  Blackhole retention purges to Trash are not counted as filed either: they appear as "purged to Trash" on the
+  blackhole line.
+- **Time saved is an estimate**, not a measurement: filed messages times `[stats] seconds_per_message`
+  (default 5). Set it to what handling a message by hand really costs you.
+- **Where it went** is split by the rule that decided each move (`sender`, `sent_to`, `thread`, `domain`,
+  `newsletter`, `bulk`, `later`), as recorded in the audit log.
+- **Corrected by you** counts messages quietbox filed that you then moved yourself, either back to INBOX or into
+  another folder, **as far as quietbox recorded it**. quietbox learns from a sender's first move; once that sender
+  is routed where you put it, moving more of their mail there leaves no record. Drag back five messages from one
+  sender and this shows 1, not 5. The error rate is that number divided by the messages filed. `undo` is shown
+  separately, because reversing a batch is not the same as quietbox being wrong.
+- **The error rate is a floor.** It only sees mistakes you noticed and fixed. To measure mail that would be
+  wrongly hidden before you trust it, use [`eval`](#how-good-would-it-be-eval).
+- `stats` reads the local database only: no IMAP login, no lock, nothing written. It prints folders, rules and
+  counts, never subjects, bodies or sender addresses. It only knows what the audit log holds, so on a database
+  that is new, the numbers start from the first move.
 
 ### Password sources
 

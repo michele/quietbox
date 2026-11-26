@@ -117,6 +117,15 @@ func defaultBlackhole() Blackhole { return Blackhole{Retention: "30d"} }
 // SweepEnabled reports whether the retention sweep is on.
 func (b Blackhole) SweepEnabled() bool { return b.RetentionDur > 0 }
 
+// Stats tunes `quietbox stats`.
+type Stats struct {
+	// SecondsPerMessage is how long handling one message by hand is assumed to
+	// take; time saved is an estimate built from it.
+	SecondsPerMessage int `toml:"seconds_per_message"`
+}
+
+func defaultStats() Stats { return Stats{SecondsPerMessage: 5} }
+
 // State locates the SQLite database.
 type State struct {
 	Path string `toml:"path"`
@@ -129,6 +138,7 @@ type Config struct {
 	Learn     Learn     `toml:"learn"`
 	Run       Run       `toml:"run"`
 	Blackhole Blackhole `toml:"blackhole"`
+	Stats     Stats     `toml:"stats"`
 	State     State     `toml:"state"`
 	Folders   []Folder  `toml:"folder"`
 
@@ -203,7 +213,7 @@ func ParseAccount(data []byte, getenv func(string) string, account string) (*Con
 }
 
 func parse(data []byte, getenv func(string) string, account string, requirePassword bool) (*Config, error) {
-	cfg := Config{Learn: defaultLearn(), Run: defaultRun(), Blackhole: defaultBlackhole(), Account: account}
+	cfg := Config{Learn: defaultLearn(), Run: defaultRun(), Blackhole: defaultBlackhole(), Stats: defaultStats(), Account: account}
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -318,6 +328,7 @@ func (c *Config) validate(requirePassword bool) error {
 
 	c.validateLearn(add)
 	c.validateBlackhole(add)
+	c.validateStats(add)
 
 	seen := map[string]bool{}
 	count := map[FolderType]int{}
@@ -459,6 +470,12 @@ func (c *Config) validateLearn(add func(string, ...any)) {
 		if v <= 0 || v > 1 {
 			add("learn.%s must be in (0, 1] (got %v)", name, v)
 		}
+	}
+}
+
+func (c *Config) validateStats(add func(string, ...any)) {
+	if c.Stats.SecondsPerMessage <= 0 {
+		add("stats.seconds_per_message must be a positive integer (got %d)", c.Stats.SecondsPerMessage)
 	}
 }
 
