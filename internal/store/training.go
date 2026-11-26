@@ -137,13 +137,9 @@ func (t *Tx) AddTraining(r TrainingRow) error {
 	return err
 }
 
-// TrainingFor returns a sender's training events, newest first.
-func (s *Store) TrainingFor(ctx context.Context, sender string) ([]TrainingRow, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, at, sender, folder, source, message_key FROM training WHERE sender = ? ORDER BY at DESC, id DESC", sender)
-	if err != nil {
-		return nil, err
-	}
+const trainingCols = "id, at, sender, folder, source, message_key"
+
+func scanTraining(rows *sql.Rows) ([]TrainingRow, error) {
 	defer func() { _ = rows.Close() }()
 	var out []TrainingRow
 	for rows.Next() {
@@ -156,6 +152,27 @@ func (s *Store) TrainingFor(ctx context.Context, sender string) ([]TrainingRow, 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// TrainingFor returns a sender's training events, newest first.
+func (s *Store) TrainingFor(ctx context.Context, sender string) ([]TrainingRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+trainingCols+" FROM training WHERE sender = ? ORDER BY at DESC, id DESC", sender)
+	if err != nil {
+		return nil, err
+	}
+	return scanTraining(rows)
+}
+
+// TrainingSince returns every training event (any source) at or after since,
+// oldest first.
+func (s *Store) TrainingSince(ctx context.Context, since time.Time) ([]TrainingRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT "+trainingCols+" FROM training WHERE at >= ? ORDER BY id", unix(since))
+	if err != nil {
+		return nil, err
+	}
+	return scanTraining(rows)
 }
 
 // Sender returns one sender route; ok is false when there is none.
