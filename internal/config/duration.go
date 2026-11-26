@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -36,6 +37,9 @@ func ParseDuration(s string) (time.Duration, error) {
 		unit = 365 * 24 * time.Hour
 	default:
 		return 0, fmt.Errorf("invalid duration %q: unknown unit %q (use h, d, w, mo, y)", s, s[i:])
+	}
+	if n > math.MaxInt64/int64(unit) {
+		return 0, fmt.Errorf("invalid duration %q: too long", s)
 	}
 	return time.Duration(n) * unit, nil
 }
