@@ -74,7 +74,7 @@ func WriteText(w io.Writer, r Report, account string) error {
 	p("  Undone with undo   %d\n", r.Undone)
 	p("  Senders retrained  %d\n", r.Retrained)
 	if r.Filed > 0 {
-		p("  The error rate counts only mistakes you fixed; mail wrongly hidden that you never noticed is not in it.\n")
+		p("  The error rate is a floor: it counts only mistakes you fixed, and only the first move per retrained sender; mail wrongly hidden that you never noticed is not in it.\n")
 	}
 	return err
 }

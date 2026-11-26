@@ -443,19 +443,22 @@ Mistakes
   Corrected by you   9  2.2%   (dragged back to INBOX 6, re-filed elsewhere 3)
   Undone with undo   0
   Senders retrained  7
-  The error rate counts only mistakes you fixed; mail wrongly hidden that you never noticed is not in it.
+  The error rate is a floor: it counts only mistakes you fixed, and only the first move per retrained sender; mail wrongly hidden that you never noticed is not in it.
 ```
 
-- **Filed away** is the number of messages quietbox moved out of INBOX in the window (moves that succeeded; a
-  later `undo` does not remove a message from this count). Blackhole retention purges to Trash are not counted
-  as filed: they appear as "purged to Trash" on the blackhole line.
+- **Filed away** is the number of messages quietbox moved out of INBOX in the window (moves that succeeded).
+  Moves you reversed with `undo` are not counted as filed or as time saved; they appear under "Undone with undo".
+  Blackhole retention purges to Trash are not counted as filed either: they appear as "purged to Trash" on the
+  blackhole line.
 - **Time saved is an estimate**, not a measurement: filed messages times `[stats] seconds_per_message`
   (default 5). Set it to what handling a message by hand really costs you.
 - **Where it went** is split by the rule that decided each move (`sender`, `sent_to`, `thread`, `domain`,
   `newsletter`, `bulk`, `later`), as recorded in the audit log.
 - **Corrected by you** counts messages quietbox filed that you then moved yourself, either back to INBOX or into
-  another folder. The error rate is that number divided by the messages filed. `undo` is shown separately,
-  because reversing a batch is not the same as quietbox being wrong.
+  another folder, **as far as quietbox recorded it**. quietbox learns from a sender's first move; once that sender
+  is routed where you put it, moving more of their mail there leaves no record. Drag back five messages from one
+  sender and this shows 1, not 5. The error rate is that number divided by the messages filed. `undo` is shown
+  separately, because reversing a batch is not the same as quietbox being wrong.
 - **The error rate is a floor.** It only sees mistakes you noticed and fixed. To measure mail that would be
   wrongly hidden before you trust it, use [`eval`](#how-good-would-it-be-eval).
 - `stats` reads the local database only: no IMAP login, no lock, nothing written. It prints folders, rules and

@@ -40,7 +40,7 @@ func TestWriteText(t *testing.T) {
 		"Last 30 days (account: fastmail)", "Filed away", "412", "est. time saved", "34 min", "5 s each",
 		"+QuietNews", "201", "49%", "sender 140", "newsletter 61", "purged to Trash 4",
 		"Corrected by you", "2.2%", "dragged back to INBOX 6", "re-filed elsewhere 3",
-		"Undone with undo", "Senders retrained", "counts only mistakes you fixed",
+		"Undone with undo", "Senders retrained", "counts only mistakes you fixed", "first move per retrained sender",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)

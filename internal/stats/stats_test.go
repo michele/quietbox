@@ -104,14 +104,14 @@ func TestComputeCorrections(t *testing.T) {
 		{At: day(9), Sender: "g@x", Folder: "INBOX", Key: "unknown-key", ByMove: true},
 	}
 	r := Compute(input(moves, events))
-	if r.Filed != 8 {
-		t.Fatalf("filed = %d, want 8", r.Filed)
+	if r.Filed != 7 {
+		t.Fatalf("filed = %d, want 7 (the undone move is not filed)", r.Filed)
 	}
 	if r.Corrected != 3 || r.BackToInbox != 2 || r.Refiled != 1 {
 		t.Fatalf("corrected=%d back=%d refiled=%d, want 3/2/1", r.Corrected, r.BackToInbox, r.Refiled)
 	}
-	if r.ErrorRate != 3.0/8.0 {
-		t.Errorf("error rate = %v, want 0.375", r.ErrorRate)
+	if r.ErrorRate != 3.0/7.0 {
+		t.Errorf("error rate = %v, want 3/7", r.ErrorRate)
 	}
 }
 
@@ -130,8 +130,11 @@ func TestComputeUndoneAndRetrained(t *testing.T) {
 	if r.Retrained != 2 {
 		t.Errorf("retrained = %d, want 2 distinct senders", r.Retrained)
 	}
-	if r.Filed != 3 {
-		t.Errorf("filed = %d: undone moves were still filed", r.Filed)
+	if r.Filed != 1 || r.SavedSeconds != 5 {
+		t.Errorf("filed=%d saved=%d, want 1/5: undone moves are neither filed nor time saved", r.Filed, r.SavedSeconds)
+	}
+	if n := folder(t, r, "+News"); n.Count != 1 || n.Share != 1 {
+		t.Errorf("+News = %+v, want count 1 share 1", n)
 	}
 }
 

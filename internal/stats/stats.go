@@ -90,13 +90,15 @@ func Compute(in Input) Report {
 		}
 		return byFolder[f]
 	}
-	filed := map[string]Move{} // by key: filed (not purged), not undone
+	filed := map[string]Move{} // by key: filed, neither purged nor undone
 	for _, m := range in.Moves {
 		if !m.Done || m.At.Before(since) {
 			continue
 		}
 		if m.Undone {
+			// Reversed by `undo`: reported on its own, neither filed nor time saved.
 			r.Undone++
+			continue
 		}
 		rule := ruleOf(m.Reason)
 		if rule == in.RetentionRule {
@@ -107,10 +109,8 @@ func Compute(in Input) Report {
 		a := get(m.To)
 		a.count++
 		a.rules[rule]++
-		if !m.Undone {
-			if _, dup := filed[m.Key]; !dup {
-				filed[m.Key] = m
-			}
+		if _, dup := filed[m.Key]; !dup {
+			filed[m.Key] = m
 		}
 	}
 	r.SavedSeconds = r.Filed * in.SecondsPerMessage

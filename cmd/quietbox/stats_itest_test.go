@@ -40,13 +40,13 @@ func TestStatsEndToEnd(t *testing.T) {
 	}
 	out, err = e.run("stats")
 	t.Logf("stats after undo:\n%s", out)
-	if err != nil || !strings.Contains(out, "Undone with undo   2") || !strings.Contains(out, "Corrected by you   1") {
+	if err != nil || !strings.Contains(out, "Filed away  1 messages") || !strings.Contains(out, "Undone with undo   2") || !strings.Contains(out, "Corrected by you   1") {
 		t.Fatalf("stats after undo: %v\n%s", err, out)
 	}
 
 	// JSON is available for scripts.
 	jout, err := e.run("stats", "--json")
-	if err != nil || !strings.Contains(jout, `"filed": 3`) || !strings.Contains(jout, `"undone": 2`) {
+	if err != nil || !strings.Contains(jout, `"filed": 1`) || !strings.Contains(jout, `"undone": 2`) {
 		t.Fatalf("stats --json: %v\n%s", err, jout)
 	}
 }

@@ -165,7 +165,7 @@ quietbox stats --since 7d</code></pre>
     <p style="margin-top:1rem">After a few days, <code>stats</code> shows how many messages quietbox filed, an estimate of the time that saved you, where the mail went, and how often you had to correct it. It reads only quietbox's own database, so it is safe to run at any time, even while quietbox is running.</p>
     <ul class="plain">
       <li><strong>Time saved</strong> is an estimate: messages filed times a number of seconds per message (5 by default). Set <code>seconds_per_message</code> in a <code>[stats]</code> section of your config to what handling a message by hand really costs you.</li>
-      <li><strong>Corrected by you</strong> counts messages quietbox filed that you then moved yourself, back to your inbox or into another folder. The error rate is that count divided by the messages filed.</li>
+      <li><strong>Corrected by you</strong> counts messages quietbox filed that you then moved yourself, back to your inbox or into another folder. quietbox learns from a sender's first move, so moving several messages from the same sender counts once. The error rate is that count divided by the messages filed. Messages you reversed with <code>undo</code> are not counted as filed.</li>
       <li>The error rate is a floor. It only counts mistakes you noticed and fixed, not mail that was filed away wrongly and that you never missed. Use <code>quietbox eval</code> to check for that before you trust it.</li>
     </ul>
   </section>
