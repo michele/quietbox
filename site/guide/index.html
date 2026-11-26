@@ -38,6 +38,7 @@
       <li><a href="#file">File mail for real</a></li>
       <li><a href="#running">Keep it running</a></li>
       <li><a href="#training">Teach it by moving mail</a></li>
+      <li><a href="#stats">See what it is doing</a></li>
       <li><a href="#undo">Change your mind</a></li>
       <li><a href="#trouble">When something is off</a></li>
     </ol>
@@ -157,8 +158,20 @@ type = "later"</code></pre>
     <p>To block a sender, move one of their messages into the blackhole folder. Nothing is deleted at that point. After 30 days, quietbox moves the mail to Trash.</p>
   </section>
 
+  <section id="stats">
+    <h2>10. See what it is doing</h2>
+<pre><code>quietbox stats
+quietbox stats --since 7d</code></pre>
+    <p style="margin-top:1rem">After a few days, <code>stats</code> shows how many messages quietbox filed, an estimate of the time that saved you, where the mail went, and how often you had to correct it. It reads only quietbox's own database, so it is safe to run at any time, even while quietbox is running.</p>
+    <ul class="plain">
+      <li><strong>Time saved</strong> is an estimate: messages filed times a number of seconds per message (5 by default). Set <code>seconds_per_message</code> in a <code>[stats]</code> section of your config to what handling a message by hand really costs you.</li>
+      <li><strong>Corrected by you</strong> counts messages quietbox filed that you then moved yourself, back to your inbox or into another folder. The error rate is that count divided by the messages filed.</li>
+      <li>The error rate is a floor. It only counts mistakes you noticed and fixed, not mail that was filed away wrongly and that you never missed. Use <code>quietbox eval</code> to check for that before you trust it.</li>
+    </ul>
+  </section>
+
   <section id="undo">
-    <h2>10. Change your mind</h2>
+    <h2>11. Change your mind</h2>
 <pre><code>quietbox undo --since 1h</code></pre>
     <p style="margin-top:1rem"><code>undo</code> moves back what quietbox filed in that time. It leaves alone anything you moved yourself since, and it will not file those messages again.</p>
   </section>
