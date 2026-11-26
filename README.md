@@ -168,6 +168,9 @@ skip_flagged = true               # leave flagged mail where it is
 retention = "30d"                 # move mail out of the blackhole folder to Trash after this long; "off" to keep it
 trash_folder = ""                 # default: the folder the server marks \Trash
 
+[stats]
+seconds_per_message = 5           # `quietbox stats` estimates time saved as filed messages x this
+
 [state]
 path = ""                         # default: $XDG_STATE_HOME/quietbox/quietbox.db
 ```

@@ -318,3 +318,34 @@ func TestBlackholeErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestStatsDefault(t *testing.T) {
+	cfg, err := Parse([]byte(validBase), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Stats.SecondsPerMessage != 5 {
+		t.Errorf("seconds_per_message = %d, want 5", cfg.Stats.SecondsPerMessage)
+	}
+}
+
+func TestStatsSecondsPerMessage(t *testing.T) {
+	cfg, err := Parse([]byte(validBase+"\n[stats]\nseconds_per_message = 12\n"), pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Stats.SecondsPerMessage != 12 {
+		t.Errorf("seconds_per_message = %d, want 12", cfg.Stats.SecondsPerMessage)
+	}
+}
+
+func TestStatsRejectsNonPositive(t *testing.T) {
+	for _, v := range []string{"0", "-3"} {
+		t.Run(v, func(t *testing.T) {
+			_, err := Parse([]byte(validBase+"\n[stats]\nseconds_per_message = "+v+"\n"), pw)
+			if err == nil || !strings.Contains(err.Error(), "stats.seconds_per_message") {
+				t.Fatalf("err = %v, want it to mention stats.seconds_per_message", err)
+			}
+		})
+	}
+}

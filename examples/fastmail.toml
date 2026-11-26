@@ -42,6 +42,10 @@ username = "you@example.com"   # <- your full Fastmail login address
 # [blackhole]
 # retention = "30d"          # "off" keeps it for good
 
+# `quietbox stats` estimates the time saved as filed messages x this many seconds.
+# [stats]
+# seconds_per_message = 5
+
 # Folders. INBOX (important) and at least one "later" folder are required.
 # Missing folders are created by `quietbox init`, only after you confirm.
 [[folder]]
